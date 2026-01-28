@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My AI App</title>
+</head>
+<body>
+    <h1>Ask My AI</h1>
+    <textarea id="userInput" placeholder="Type your question..."></textarea>
+    <button onclick="sendMessage()">Send</button>
+    <p id="aiResponse"></p>
+
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById('userInput').value;
+            const responseText = document.getElementById('aiResponse');
+            
+            responseText.innerText = "Thinking...";
+
+            // REPLACE THIS URL with your live backend URL later (see Step 4)
+            const backendUrl = "http://localhost:3000/chat";
+
+            try {
+                const response = await fetch(backendUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: input })
+                });
+
+                const data = await response.json();
+                responseText.innerText = data.reply;
+            } catch (error) {
+                responseText.innerText = "Error connecting to server.";
+            }
+        }
+    </script>
+</body>
+</html>
