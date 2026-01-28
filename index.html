@@ -1,37 +1,50 @@
+
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>My AI App</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MythosForge | Prompt Architect</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #0f172a;
+      color: #f1f5f9;
+    }
+    .mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #1e293b;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
 </head>
 <body>
-    <h1>Ask My AI</h1>
-    <textarea id="userInput" placeholder="Type your question..."></textarea>
-    <button onclick="sendMessage()">Send</button>
-    <p id="aiResponse"></p>
-
-    <script>
-        async function sendMessage() {
-            const input = document.getElementById('userInput').value;
-            const responseText = document.getElementById('aiResponse');
-            
-            responseText.innerText = "Thinking...";
-
-            // REPLACE THIS URL with your live backend URL later (see Step 4)
-            const backendUrl = "http://localhost:3000/chat";
-
-            try {
-                const response = await fetch(backendUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ message: input })
-                });
-
-                const data = await response.json();
-                responseText.innerText = data.reply;
-            } catch (error) {
-                responseText.innerText = "Error connecting to server.";
-            }
-        }
-    </script>
+  <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
 </body>
 </html>
