@@ -514,6 +514,12 @@ export default function App() {
     }));
   };
 
+  const getApiKey = () => {
+    // Priority: Custom Key > Environment Key
+    const k = globalData.customApiKey?.trim() || process.env.API_KEY;
+    return k?.trim();
+  };
+
   const sendToAI = async (text: string, isStoryGen = false) => {
     setIsChatOpen(true);
     setChatMessages(prev => [...prev, { role: 'user', text }]);
@@ -521,7 +527,8 @@ export default function App() {
     setIsTyping(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const apiKey = getApiKey();
+      const ai = new GoogleGenAI({ apiKey });
       
       let contents;
       
@@ -561,15 +568,18 @@ export default function App() {
         // Optionally auto-breakdown here if desired, but button is safer
       }
 
-    } catch (error) {
-      setChatMessages(prev => [...prev, { role: 'model', text: "Nanobanana Pro text refinement failed. Verify your access permissions." }]);
+    } catch (error: any) {
+      console.error(error);
+      const msg = error.message || "Unknown API Error";
+      setChatMessages(prev => [...prev, { role: 'model', text: `Error: ${msg}. Check API Key permissions.` }]);
     } finally {
       setIsTyping(false);
     }
   };
 
   const generateVoice = async (textToSpeak: string) => {
-    if (!hasKey) {
+    const apiKey = getApiKey();
+    if (!hasKey && !apiKey) {
       await handleOpenKey();
       return;
     }
@@ -583,7 +593,7 @@ export default function App() {
     setGenStatus(`Synthesizing voice using ${charData.voiceProfile}...`);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: { parts: [{ text: spokenText }] },
@@ -611,9 +621,10 @@ export default function App() {
         throw new Error("No audio data returned");
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      setChatMessages(prev => [...prev, { role: 'model', text: "Voice synthesis failed. Please try again." }]);
+      const msg = error.message || "Unknown Voice Error";
+      setChatMessages(prev => [...prev, { role: 'model', text: `Voice Failed: ${msg}` }]);
     } finally {
       setIsTyping(false);
       setGenStatus('');
@@ -621,7 +632,8 @@ export default function App() {
   };
 
   const generateImage = async (promptText: string, isStoryboard = false) => {
-    if (!hasKey) {
+    const apiKey = getApiKey();
+    if (!hasKey && !apiKey) {
       await handleOpenKey();
       return;
     }
@@ -648,7 +660,7 @@ export default function App() {
     }, 1500);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       
       const contents: any = { parts: [] };
       let promptPrefix = "";
@@ -744,9 +756,11 @@ export default function App() {
       } else {
         throw new Error("Empty image payload");
       }
-    } catch (error) {
+    } catch (error: any) {
       clearInterval(interval);
-      setChatMessages(prev => [...prev, { role: 'model', text: "Nanobanana Pro Visualizer Error. High-fidelity consistency requires an active visual buffer." }]);
+      console.error(error);
+      const msg = error.message || "Visual Generation Error";
+      setChatMessages(prev => [...prev, { role: 'model', text: `Visual Failed: ${msg}. Check API Key permissions or try a simpler prompt.` }]);
     } finally {
       setIsTyping(false);
       setGenStatus('');
@@ -994,7 +1008,7 @@ export default function App() {
               </section>
 
               <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                <SectionTitle title="Pro Render Config" icon="fa-gear" />
+                <SectionTitle title="AI & Render Config" icon="fa-gear" />
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs font-medium text-slate-400">Aspect Ratio</label>
@@ -1021,7 +1035,7 @@ export default function App() {
                     </select>
                   </div>
                 </div>
-                <InputField label="External Visual API Key (Optional)" type="password" value={globalData.customApiKey || ''} onChange={(v) => setGlobalData({...globalData, customApiKey: v})} placeholder="For custom endpoints..." />
+                <InputField label="Custom Google AI API Key (Optional)" type="password" value={globalData.customApiKey || ''} onChange={(v) => setGlobalData({...globalData, customApiKey: v})} placeholder="Allows custom quota usage..." />
               </section>
             </>
           )}
