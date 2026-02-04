@@ -13,6 +13,17 @@ export enum AppMode {
   STORY = 'Story'
 }
 
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  picture: string;
+  apiKeys: {
+    gemini?: string;
+    elevenLabs?: string;
+  };
+}
+
 export interface Message {
   role: 'user' | 'model';
   text: string;
@@ -20,8 +31,8 @@ export interface Message {
   audioData?: string; // base64 encoded audio
   status?: string;
   isReference?: boolean;
-  isStoryboard?: boolean; // Flag for storyboard grids
-  isMultiView?: boolean; // Flag for multi-view character sheets
+  isStoryboard?: boolean; 
+  isMultiView?: boolean; 
 }
 
 export interface GlobalData {
@@ -31,7 +42,7 @@ export interface GlobalData {
   lightingTheme: string;
   colorPalette: string;
   customApiKey?: string;
-  elevenLabsApiKey?: string; // New ElevenLabs Key
+  elevenLabsApiKey?: string; 
   aspectRatio: "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
   imageQuality: "1K" | "2K";
   styleReferenceImages: string[];
@@ -50,11 +61,12 @@ export interface SavedElement {
 export interface StoryData {
   synopsis: string;
   fullStory: string;
-  storyScenes: string[]; // Breakdown of story into segments
+  storyScenes: string[]; 
 }
 
 export interface Session {
   id: string;
+  userId: string; // Owner of the session
   name: string;
   lastModified: number;
   data: {
@@ -93,7 +105,6 @@ export interface CharacterData {
   height: string;
   build: string;
   distinguishingFeatures: string;
-  // New Attributes
   skinTone: string;
   tattoosMarkings: string;
   clothingStyle: string;
@@ -114,12 +125,10 @@ export interface CharacterData {
   allies: string;
   enemies: string;
   petCompanion: string;
-  // Voice
-  voiceProvider: 'Gemini' | 'ElevenLabs'; // New Provider Switch
-  voiceProfile: string; // Gemini Voice Name
-  elevenLabsVoiceId?: string; // New ElevenLabs Voice ID
+  voiceProvider: 'Gemini' | 'ElevenLabs'; 
+  voiceProfile: string; 
+  elevenLabsVoiceId?: string; 
   voiceDescription: string;
-  // User Additions
   customImage?: string;
   additionalDetails?: string;
 }
@@ -138,7 +147,6 @@ export interface EnvironmentData {
   visualStyle: string;
   scale: string;
   colors: string;
-  // User Additions
   customImage?: string;
   additionalDetails?: string;
 }
@@ -156,7 +164,6 @@ export interface PropData {
   visualDetails: string;
   history: string;
   visualStyle: string;
-  // User Additions
   customImage?: string;
   additionalDetails?: string;
 }
@@ -187,7 +194,6 @@ export interface RandomPool {
   genres: string[];
   timePeriods: string[];
   lightingThemes: string[];
-  // New Pools
   skinTones: string[];
   alignments: string[];
   intelligences: string[];
@@ -195,7 +201,6 @@ export interface RandomPool {
   weapons: string[];
   combatStyles: string[];
   voices: string[];
-  // Comprehensive Coverage Pools
   scents: string[];
   tattoos: string[];
   gaits: string[];
@@ -217,16 +222,6 @@ export interface RandomPool {
 
 declare global {
   interface Window {
-    google?: {
-      accounts: {
-        oauth2: {
-          initTokenClient: (config: {
-            client_id: string;
-            scope: string;
-            callback: (response: any) => void;
-          }) => { requestAccessToken: () => void };
-        }
-      }
-    };
+    google?: any;
   }
 }
