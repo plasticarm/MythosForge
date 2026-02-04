@@ -76,6 +76,7 @@ Companion: ${data.petCompanion}.
 Voice: ${data.voiceProfile} - ${data.voiceDescription}.
 Backstory: ${data.backstory}.
 Secrets: ${data.secrets}.
+${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}
 `.trim(),
 
   characterVisual: (data: any) => `
@@ -86,6 +87,7 @@ Clothing: ${data.clothingStyle}.
 Vibe: ${data.visualStyle}, ${data.postureGait}.
 Lighting: Dramatic cinematic lighting focusing on ${data.scent ? 'atmospheric' : 'sharp'} details.
 8k resolution, photorealistic, depth of field, sharp focus on eyes.
+${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}
 `.trim(),
 
   characterMultiView: (data: any) => `
@@ -95,17 +97,27 @@ Layout: Front, 3/4 side, and back views.
 Focus: ${data.clothingStyle}, ${data.signatureWeapon}, and ${data.distinguishingFeatures}.
 Background: Clean neutral studio background.
 Style: Professional concept art for high-end production.
+${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}
+`.trim(),
+
+  characterSplitView: (name: string, view: string) => `
+Single View Generation: ${name}.
+Viewpoint: ${view} View.
+Instruction: Crop and refine into a single standalone image of this character from the provided reference.
+Subject: Isolate the character. Full body or Upper body as appropriate for a ${view} view.
+Constraints: NO text, NO diagrams, NO color palettes, NO other views. White/Neutral background only.
+Consistency: STRICTLY maintain facial features, clothing, and colors from reference.
 `.trim(),
 
   // --- Environment Templates ---
-  envCinematic: (data: any) => `Cinematic Scene: ${data.name || 'Unnamed Location'}. Biome: ${data.biome}. Architecture: ${data.architecture}. Time: ${data.timeOfDay}. Weather: ${data.weather}. Atmosphere: ${data.atmosphere}. Lighting: ${data.lighting}. Visual Style: ${data.visualStyle}. Describe the mood and the scale (${data.scale}).`.trim(),
-  envWorldbuilding: (data: any) => `World Atlas Entry: ${data.name}. Region: ${data.biome}. History: ${data.history}. Key Landmarks: ${data.landmarks}. Atmosphere: ${data.atmosphere}. Explain the cultural significance of the ${data.architecture} style found here.`.trim(),
-  envConcept: (data: any) => `Environment Concept Art: ${data.biome}. Wide angle shot. Landmarks: ${data.landmarks}. Colors: ${data.colors}. Style: ${data.visualStyle}. High-quality render, sweeping vista, immersive detail.`.trim(),
+  envCinematic: (data: any) => `Cinematic Scene: ${data.name || 'Unnamed Location'}. Biome: ${data.biome}. Architecture: ${data.architecture}. Time: ${data.timeOfDay}. Weather: ${data.weather}. Atmosphere: ${data.atmosphere}. Lighting: ${data.lighting}. Visual Style: ${data.visualStyle}. Describe the mood and the scale (${data.scale}). ${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}`.trim(),
+  envWorldbuilding: (data: any) => `World Atlas Entry: ${data.name}. Region: ${data.biome}. History: ${data.history}. Key Landmarks: ${data.landmarks}. Atmosphere: ${data.atmosphere}. Explain the cultural significance of the ${data.architecture} style found here. ${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}`.trim(),
+  envConcept: (data: any) => `Environment Concept Art: ${data.biome}. Wide angle shot. Landmarks: ${data.landmarks}. Colors: ${data.colors}. Style: ${data.visualStyle}. High-quality render, sweeping vista, immersive detail. ${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}`.trim(),
 
   // --- Prop Templates ---
-  propDescription: (data: any) => `Object Description: ${data.name}. Category: ${data.category}. Material: ${data.material}. Origin: ${data.origin}. Condition: ${data.condition}. Visual Details: ${data.visualDetails}. Technical/Magical Properties: ${data.properties}. Describe its weight and tactile feel.`.trim(),
-  propRelic: (data: any) => `Legendary Item Lore: ${data.name}. History: ${data.history}. Category: ${data.category}. Current State: ${data.condition}. Hidden Properties: ${data.properties}. Narrative focus on how it was used in ${data.origin}.`.trim(),
-  propDesign: (data: any) => `Prop Design Sheet: ${data.name}. Material: ${data.material}. Visual Details: ${data.visualDetails}. Style: ${data.visualStyle}. Orthographic views showing Front, Top, and Side. 4k resolution, industrial/magic design clarity.`.trim(),
+  propDescription: (data: any) => `Object Description: ${data.name}. Category: ${data.category}. Material: ${data.material}. Origin: ${data.origin}. Condition: ${data.condition}. Visual Details: ${data.visualDetails}. Technical/Magical Properties: ${data.properties}. Describe its weight and tactile feel. ${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}`.trim(),
+  propRelic: (data: any) => `Legendary Item Lore: ${data.name}. History: ${data.history}. Category: ${data.category}. Current State: ${data.condition}. Hidden Properties: ${data.properties}. Narrative focus on how it was used in ${data.origin}. ${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}`.trim(),
+  propDesign: (data: any) => `Prop Design Sheet: ${data.name}. Material: ${data.material}. Visual Details: ${data.visualDetails}. Style: ${data.visualStyle}. Orthographic views showing Front, Top, and Side. 4k resolution, industrial/magic design clarity. ${data.additionalDetails ? `\nAdditional Notes: ${data.additionalDetails}` : ''}`.trim(),
 
   // --- Story Templates ---
   storyGen: (synopsis: string, context: string) => `
@@ -120,5 +132,10 @@ Create a comic book page layout with a 2x2 grid (4 panels).
 Depicting this scene: "${scene}".
 Style: High-contrast graphic novel, consistent with provided character references.
 Ensure clear visual storytelling. Panels should have borders.
+`.trim(),
+
+  // --- Midjourney Optimization ---
+  midjourneyPrompt: (data: any) => `
+/imagine prompt: ${data.visualStyle} concept art of ${data.name}, ${data.species} ${data.role} ${data.archetype}. Wearing ${data.clothingStyle}. ${data.hairColor} hair, ${data.eyeColor} eyes, ${data.distinguishingFeatures}. Action: ${data.postureGait}. Environment: ${data.scent ? 'Atmospheric background' : 'Neutral background'}. Lighting: ${data.visualStyle} lighting. --ar 16:9 --v 6.0 --stylize 250 --no text, blurred, low quality
 `.trim()
 };

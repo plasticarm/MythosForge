@@ -1,5 +1,4 @@
 
-
 export enum DetailLevel {
   SIMPLE = 'Simple',
   INTERMEDIATE = 'Intermediate',
@@ -22,6 +21,7 @@ export interface Message {
   status?: string;
   isReference?: boolean;
   isStoryboard?: boolean; // Flag for storyboard grids
+  isMultiView?: boolean; // Flag for multi-view character sheets
 }
 
 export interface GlobalData {
@@ -31,6 +31,7 @@ export interface GlobalData {
   lightingTheme: string;
   colorPalette: string;
   customApiKey?: string;
+  elevenLabsApiKey?: string; // New ElevenLabs Key
   aspectRatio: "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
   imageQuality: "1K" | "2K";
   styleReferenceImages: string[];
@@ -60,8 +61,11 @@ export interface Session {
     mode: AppMode;
     globalData: GlobalData;
     charData: CharacterData;
+    characterLibrary: CharacterData[];
     envData: EnvironmentData;
+    environmentLibrary: EnvironmentData[];
     propData: PropData;
+    propLibrary: PropData[];
     storyData: StoryData;
     savedElements: SavedElement[];
     chatMessages: Message[];
@@ -69,6 +73,7 @@ export interface Session {
 }
 
 export interface CharacterData {
+  id?: string;
   name: string;
   species: string;
   age: string;
@@ -110,11 +115,17 @@ export interface CharacterData {
   enemies: string;
   petCompanion: string;
   // Voice
-  voiceProfile: string;
+  voiceProvider: 'Gemini' | 'ElevenLabs'; // New Provider Switch
+  voiceProfile: string; // Gemini Voice Name
+  elevenLabsVoiceId?: string; // New ElevenLabs Voice ID
   voiceDescription: string;
+  // User Additions
+  customImage?: string;
+  additionalDetails?: string;
 }
 
 export interface EnvironmentData {
+  id?: string;
   name: string;
   biome: string;
   timeOfDay: string;
@@ -127,9 +138,13 @@ export interface EnvironmentData {
   visualStyle: string;
   scale: string;
   colors: string;
+  // User Additions
+  customImage?: string;
+  additionalDetails?: string;
 }
 
 export interface PropData {
+  id?: string;
   name: string;
   category: string;
   material: string;
@@ -141,6 +156,9 @@ export interface PropData {
   visualDetails: string;
   history: string;
   visualStyle: string;
+  // User Additions
+  customImage?: string;
+  additionalDetails?: string;
 }
 
 export interface RandomPool {
