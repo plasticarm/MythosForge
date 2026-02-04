@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI, GenerateContentResponse, Modality } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Modality, Type } from "@google/genai";
 import { User, DetailLevel, AppMode, CharacterData, EnvironmentData, PropData, GlobalData, SavedElement, StoryData, Session, Message } from './types';
 import { RANDOM_POOL, PROMPT_TEMPLATES } from './constants';
 
@@ -50,6 +50,33 @@ const downloadAudio = (base64Data: string, filename: string, isElevenLabs = fals
   } catch (e) {
     console.error("Download error:", e);
   }
+};
+
+const cropImage = (base64Image: string, quadrant: number): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const w = img.width / 2;
+      const h = img.height / 2;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject("No context"); return; }
+      
+      // Quadrants: 1=TL, 2=TR, 3=BL, 4=BR
+      // Map 1-4 to x,y coordinates
+      const qIndex = quadrant - 1; 
+      const x = (qIndex % 2) * w;
+      const y = Math.floor(qIndex / 2) * h;
+      
+      ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = (e) => reject(e);
+    img.src = base64Image;
+  });
 };
 
 const useClickOutside = (ref: React.RefObject<HTMLElement | null>, handler: () => void) => {
@@ -296,6 +323,40 @@ export default function App() {
     } catch (error: any) { setChatMessages(prev => [...prev, { role: 'model', text: `Error: ${error.message}.`, status: 'error' }]); } finally { setIsTyping(false); }
   };
 
+  const analyzeStory = async () => {
+    if (!storyData.fullStory) return;
+    const apiKey = getApiKey();
+    if (!hasKey && !apiKey) { await handleOpenKey(); return; }
+    
+    setIsTyping(true);
+    setGenStatus('Deconstructing narrative...');
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: storyData.fullStory,
+        config: {
+          systemInstruction: "You are a storyboard director. Analyze the provided story and break it down into a list of 4-8 visual scene descriptions suitable for generating storyboard panels. Return ONLY a JSON array of strings.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          }
+        }
+      });
+      
+      if (response.text) {
+        const scenes = JSON.parse(response.text);
+        setStoryData(prev => ({ ...prev, storyScenes: scenes }));
+      }
+    } catch (error: any) {
+      setChatMessages(prev => [...prev, { role: 'model', text: `Analysis Failed: ${error.message}.`, status: 'error' }]);
+    } finally {
+      setIsTyping(false);
+      setGenStatus('');
+    }
+  };
+
   const generateVoice = async (textToSpeak: string) => {
     const apiKey = getApiKey(); if (!hasKey && !apiKey && charData.voiceProvider === 'Gemini') { await handleOpenKey(); return; }
     const spokenText = textToSpeak || `${charData.name}. ${charData.personality}`;
@@ -316,23 +377,47 @@ export default function App() {
     } catch (error: any) { setChatMessages(prev => [...prev, { role: 'model', text: `Voice Error: ${error.message}.`, status: 'error' }]); } finally { setIsTyping(false); setGenStatus(''); }
   };
 
-  const generateImage = async (promptText: string, options: { isStoryboard?: boolean, isMultiView?: boolean, specificRef?: string } = {}) => {
-    const { isStoryboard = false, isMultiView = false, specificRef } = options;
+  const generateImage = async (promptText: string, options: { isStoryboard?: boolean, isMultiView?: boolean, specificRef?: string, imageInput?: string } = {}) => {
+    const { isStoryboard = false, isMultiView = false, specificRef, imageInput } = options;
     const apiKey = getApiKey(); if (!hasKey && !apiKey) { await handleOpenKey(); return; }
     let uploadedRef: string | undefined; if (mode === AppMode.CHARACTER) uploadedRef = charData.customImage; else if (mode === AppMode.ENVIRONMENT) uploadedRef = envData.customImage; else if (mode === AppMode.PROP) uploadedRef = propData.customImage;
-    setIsChatOpen(true); setIsTyping(true); setGenStatus('Visual manifesting...');
+    
+    // Context building
+    const savedContext = savedElements.map(e => `[Saved ${e.type} Reference]: ${e.name} - ${e.description}`).join('\n');
+    const fullContextPrompt = `Context from Registry:\n${savedContext}\n\nScene Description: ${promptText}`;
+
+    setIsChatOpen(true); setIsTyping(true); setGenStatus(imageInput ? 'Upscaling Detail...' : 'Visual manifesting...');
     try {
       const ai = new GoogleGenAI({ apiKey }); const contents: any = { parts: [] }; let promptPrefix = "";
       if (globalData.styleReferenceImages.length > 0) { globalData.styleReferenceImages.forEach(imgData => { contents.parts.push({ inlineData: { data: imgData.split(',')[1], mimeType: imgData.split(';')[0].split(':')[1] } }); }); promptPrefix += ` Use provided visual style.`; }
-      if (specificRef) contents.parts.push({ inlineData: { data: specificRef.split(',')[1], mimeType: 'image/png' } }); else if (uploadedRef) contents.parts.push({ inlineData: { data: uploadedRef.split(',')[1], mimeType: 'image/png' } });
+      
+      if (imageInput) {
+        contents.parts.push({ inlineData: { data: imageInput.split(',')[1], mimeType: 'image/png' } });
+        promptPrefix += " Refine and upscale this composition. ";
+      } else if (specificRef) {
+        contents.parts.push({ inlineData: { data: specificRef.split(',')[1], mimeType: 'image/png' } });
+      } else if (uploadedRef) {
+        contents.parts.push({ inlineData: { data: uploadedRef.split(',')[1], mimeType: 'image/png' } }); 
+      }
+
       const finalPrompt = isStoryboard 
-        ? `Graphic Novel Layout: ${promptText}. Style: ${globalData.style}. Create a sequence of panels depicting this scene. High contrast, dynamic storytelling.` 
-        : `${promptPrefix} Professional Concept Art: ${promptText}. Cinematic, 8k, ${globalData.style}.`; 
+        ? `${promptPrefix} Comic Book Page Layout: 4-panel grid (2x2). Scene: ${fullContextPrompt}. Style: ${globalData.style}. High contrast, dynamic angles, consistent character details from registry.` 
+        : `${promptPrefix} Professional Concept Art: ${fullContextPrompt}. Cinematic, 8k, ${globalData.style}.`; 
       contents.parts.push({ text: finalPrompt });
+      
       const response = await ai.models.generateContent({ model: 'gemini-3-pro-image-preview', contents, config: { imageConfig: { aspectRatio: isStoryboard ? "4:3" : globalData.aspectRatio, imageSize: globalData.imageQuality } } });
       let imageUrl = ''; if (response.candidates?.[0]?.content?.parts) { for (const part of response.candidates[0].content.parts) { if (part.inlineData) { imageUrl = `data:image/png;base64,${part.inlineData.data}`; break; } } }
-      if (imageUrl) setChatMessages(prev => [...prev, { role: 'model', text: isStoryboard ? `Storyboard generated for: ${promptText}` : `Visualized.`, image: imageUrl, isStoryboard, isMultiView }]); else throw new Error("Empty image payload");
+      if (imageUrl) setChatMessages(prev => [...prev, { role: 'model', text: isStoryboard ? `Storyboard generated: ${promptText}` : `Visualized.`, image: imageUrl, isStoryboard, isMultiView }]); else throw new Error("Empty image payload");
     } catch (error: any) { setChatMessages(prev => [...prev, { role: 'model', text: `Visual Failed: ${error.message}.`, status: 'error' }]); } finally { setIsTyping(false); setGenStatus(''); }
+  };
+  
+  const handleUpscaleQuadrant = async (base64Image: string, quadrant: number, originalPrompt: string) => {
+    try {
+        const croppedImage = await cropImage(base64Image, quadrant);
+        generateImage(originalPrompt, { isStoryboard: false, imageInput: croppedImage });
+    } catch (e) {
+        console.error("Upscale failed", e);
+    }
   };
 
   const getContextName = () => { switch(mode) { case AppMode.CHARACTER: return charData.name || 'Character'; case AppMode.ENVIRONMENT: return envData.name || 'Environment'; case AppMode.PROP: return propData.name || 'Prop'; default: return 'Session'; } };
@@ -466,8 +551,8 @@ export default function App() {
 
       <div className="bg-slate-900/30 border-b border-slate-800 px-8 py-4 sticky top-24 z-40 backdrop-blur-md">
         <div className="max-w-6xl mx-auto flex gap-4 overflow-x-auto pb-1">
-          {[AppMode.GLOBALS, AppMode.CHARACTER, AppMode.ENVIRONMENT, AppMode.PROP, AppMode.STORY].map((m) => (
-            <button key={m} onClick={() => { setMode(m); setActiveFooterTab(0); }} className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap ${mode === m ? 'bg-yellow-500 text-slate-950 shadow-lg shadow-yellow-500/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}><i className={`fa-solid ${m === AppMode.GLOBALS ? 'fa-sliders' : m === AppMode.CHARACTER ? 'fa-user' : m === AppMode.ENVIRONMENT ? 'fa-mountain' : m === AppMode.STORY ? 'fa-book-skull' : 'fa-cube'}`}></i>{m === AppMode.GLOBALS ? m : m === AppMode.STORY ? 'Story' : `${m}s`}</button>
+          {[AppMode.GLOBALS, AppMode.CHARACTER, AppMode.ENVIRONMENT, AppMode.PROP, AppMode.STORY, AppMode.CHRONICLE].map((m) => (
+            <button key={m} onClick={() => { setMode(m); setActiveFooterTab(0); }} className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap ${mode === m ? 'bg-yellow-500 text-slate-950 shadow-lg shadow-yellow-500/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}><i className={`fa-solid ${m === AppMode.GLOBALS ? 'fa-sliders' : m === AppMode.CHARACTER ? 'fa-user' : m === AppMode.ENVIRONMENT ? 'fa-mountain' : m === AppMode.STORY ? 'fa-book-skull' : m === AppMode.CHRONICLE ? 'fa-scroll' : 'fa-cube'}`}></i>{m === AppMode.GLOBALS ? m : m === AppMode.STORY ? 'Story' : m === AppMode.CHRONICLE ? 'Chronicle' : `${m}s`}</button>
           ))}
         </div>
       </div>
@@ -504,11 +589,61 @@ export default function App() {
 
            {mode === AppMode.STORY && (
               <>
+                {/* Story Context Board */}
+                <div className="col-span-full mb-6">
+                    <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4">
+                         <SectionTitle title="Story Context Board" icon="fa-users-viewfinder" />
+                         {savedElements.length === 0 ? (
+                             <div className="text-center py-6 text-slate-600 text-xs italic border-2 border-dashed border-slate-800 rounded-xl">No active assets in the registry. Save Characters, Props, or Environments to use them here.</div>
+                         ) : (
+                             <div className="flex gap-4 overflow-x-auto pb-2 custom-scrollbar">
+                                 {savedElements.map(el => (
+                                     <div key={el.id} className="min-w-[160px] w-[160px] bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg group">
+                                         <div className="h-24 w-full bg-slate-900 overflow-hidden relative">
+                                            <img src={el.imageUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" alt={el.name} />
+                                            <div className="absolute top-1 right-1 bg-slate-950/80 px-1.5 py-0.5 rounded text-[8px] font-black uppercase text-white">{el.type}</div>
+                                         </div>
+                                         <div className="p-3">
+                                             <div className="font-bold text-xs text-white truncate">{el.name}</div>
+                                             <div className="text-[10px] text-slate-500 line-clamp-2 leading-tight mt-1 h-8">{el.description}</div>
+                                         </div>
+                                     </div>
+                                 ))}
+                             </div>
+                         )}
+                    </div>
+                </div>
+
                  <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4 col-span-1 lg:col-span-2">
                     <SectionTitle title="Story Studio" icon="fa-pen-nib" />
                     <InputField label="Synopsis" value={storyData.synopsis} onChange={(v) => setStoryData({...storyData, synopsis: v})} isTextArea />
                     <button onClick={() => sendToAI(storyData.synopsis, true)} className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-white transition-all shadow-lg shadow-indigo-600/20">Generate Narrative</button>
                     <InputField label="Full Story" value={storyData.fullStory} onChange={(v) => setStoryData({...storyData, fullStory: v})} isTextArea rows={12} />
+                    
+                    <div className="flex justify-end">
+                       <button onClick={analyzeStory} disabled={!storyData.fullStory} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-bold transition-all border border-slate-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                          <i className="fa-solid fa-scissors"></i> Break into Scenes
+                       </button>
+                    </div>
+                    {storyData.storyScenes.length > 0 && (
+                       <div className="space-y-2 mt-2">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Detected Scenes</label>
+                          <div className="grid gap-2">
+                             {storyData.storyScenes.map((scene, idx) => (
+                                <div key={idx} className={`flex items-start gap-3 p-3 rounded-lg border transition-all ${storyboardScene === scene ? 'bg-yellow-500/10 border-yellow-500' : 'bg-slate-800 border-slate-700 hover:border-slate-500'}`}>
+                                   <div className="flex-1 cursor-pointer" onClick={() => setStoryboardScene(scene)}>
+                                      <div className="font-bold mb-1 text-[10px] opacity-50 uppercase text-slate-400">Scene {idx + 1}</div>
+                                      <div className={`text-xs leading-relaxed ${storyboardScene === scene ? 'text-yellow-500' : 'text-slate-300'}`}>{scene}</div>
+                                   </div>
+                                   <button onClick={() => generateImage(scene, { isStoryboard: true })} className="shrink-0 px-3 py-1.5 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white border border-indigo-500/30 rounded text-[10px] font-black uppercase tracking-wide flex flex-col items-center gap-1 transition-all">
+                                      <i className="fa-solid fa-table-cells-large text-sm"></i>
+                                      Grid (2x2)
+                                   </button>
+                                </div>
+                             ))}
+                          </div>
+                       </div>
+                    )}
                  </section>
 
                  <div className="space-y-4">
@@ -538,6 +673,102 @@ export default function App() {
                     </section>
                  </div>
               </>
+           )}
+
+           {mode === AppMode.CHRONICLE && (
+              <div className="col-span-full space-y-12 max-w-4xl mx-auto pb-32">
+                 <div className="text-center space-y-4 py-10 border-b border-slate-800">
+                    <h1 className="text-5xl font-black text-white tracking-tight">{currentSessionName}</h1>
+                    <div className="flex flex-wrap justify-center gap-4 text-xs text-yellow-500 font-bold uppercase tracking-widest">
+                       <span>{globalData.genre}</span>
+                       <span className="text-slate-700">•</span>
+                       <span>{globalData.timePeriod}</span>
+                       <span className="text-slate-700">•</span>
+                       <span>{globalData.style}</span>
+                    </div>
+                 </div>
+
+                 {storyData.fullStory ? (
+                   <section className="prose prose-invert prose-lg max-w-none">
+                     <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-3"><i className="fa-solid fa-book-open text-yellow-500"></i> The Narrative</h2>
+                     <div className="bg-slate-900/40 p-8 rounded-2xl border border-slate-800 leading-relaxed text-slate-300 whitespace-pre-wrap font-serif text-lg shadow-xl shadow-black/20">{storyData.fullStory}</div>
+                   </section>
+                 ) : (
+                    <div className="text-center py-10 text-slate-600 italic border-2 border-dashed border-slate-800 rounded-xl">The story has not yet been written. Visit the Story Studio to generate the narrative.</div>
+                 )}
+
+                 {characterLibrary.length > 0 && (
+                    <section>
+                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-users text-indigo-500"></i> Dramatis Personae</h2>
+                       <div className="grid gap-6">
+                          {characterLibrary.map(char => (
+                             <div key={char.id} className="flex flex-col md:flex-row gap-6 bg-slate-900/40 p-6 rounded-2xl border border-slate-800/50 hover:border-slate-700 transition-colors">
+                                {char.customImage && (<div className="w-full md:w-48 h-64 shrink-0 rounded-xl overflow-hidden shadow-lg border border-slate-700 bg-slate-950"><img src={char.customImage} className="w-full h-full object-cover" alt={char.name} /></div>)}
+                                <div className="flex-1 space-y-3">
+                                    <div><h3 className="text-xl font-bold text-white">{char.name}</h3><p className="text-indigo-400 text-xs font-black uppercase tracking-widest">{char.species} • {char.role}</p></div>
+                                    <p className="text-slate-300 text-sm leading-relaxed italic">"{char.personality}"</p>
+                                    <div className="grid grid-cols-2 gap-4 text-xs text-slate-400 mt-4 bg-slate-950/30 p-4 rounded-lg">
+                                        <div><strong className="text-slate-500 block uppercase text-[10px] mb-1">Archetype</strong> {char.archetype}</div>
+                                        <div><strong className="text-slate-500 block uppercase text-[10px] mb-1">Motivation</strong> {char.motivation}</div>
+                                        <div className="col-span-2"><strong className="text-slate-500 block uppercase text-[10px] mb-1">Backstory</strong> {char.backstory}</div>
+                                    </div>
+                                </div>
+                             </div>
+                          ))}
+                       </div>
+                    </section>
+                 )}
+
+                 {environmentLibrary.length > 0 && (
+                    <section>
+                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-map-location-dot text-emerald-500"></i> Key Locations</h2>
+                       <div className="grid gap-6 md:grid-cols-2">
+                          {environmentLibrary.map(env => (
+                             <div key={env.id} className="group bg-slate-900/40 rounded-2xl border border-slate-800/50 overflow-hidden hover:border-slate-700 transition-colors">
+                                {env.customImage && (<div className="h-48 w-full bg-slate-950 overflow-hidden"><img src={env.customImage} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt={env.name} /></div>)}
+                                <div className="p-6 space-y-3">
+                                    <div><h3 className="text-lg font-bold text-white">{env.name}</h3><p className="text-emerald-500 text-xs font-black uppercase tracking-widest">{env.biome} • {env.timeOfDay}</p></div>
+                                    <p className="text-slate-400 text-xs leading-relaxed">{env.atmosphere} atmosphere. {env.architecture} style.</p>
+                                    {env.history && <p className="text-slate-500 text-xs italic mt-2 border-t border-slate-800/50 pt-2">{env.history}</p>}
+                                </div>
+                             </div>
+                          ))}
+                       </div>
+                    </section>
+                 )}
+
+                 {propLibrary.length > 0 && (
+                    <section>
+                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-gem text-pink-500"></i> Artifacts & Items</h2>
+                       <div className="grid gap-4 md:grid-cols-3">
+                          {propLibrary.map(prop => (
+                             <div key={prop.id} className="bg-slate-900/40 p-4 rounded-xl border border-slate-800/50 hover:border-slate-700 transition-colors flex flex-col gap-3">
+                                {prop.customImage && (<div className="aspect-square w-full rounded-lg overflow-hidden bg-slate-950 border border-slate-800"><img src={prop.customImage} className="w-full h-full object-cover" alt={prop.name} /></div>)}
+                                <div><h3 className="text-sm font-bold text-white">{prop.name}</h3><p className="text-pink-500 text-[10px] font-black uppercase tracking-widest">{prop.category}</p></div>
+                                <p className="text-slate-400 text-xs line-clamp-3">{prop.properties}</p>
+                             </div>
+                          ))}
+                       </div>
+                    </section>
+                 )}
+
+                 {savedElements.length > 0 && (
+                    <section>
+                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-images text-blue-500"></i> Visual Archive</h2>
+                       <div className="columns-2 md:columns-3 gap-4 space-y-4">
+                          {savedElements.map(el => (
+                             <div key={el.id} className="break-inside-avoid bg-slate-900/40 rounded-xl border border-slate-800 overflow-hidden group">
+                                <img src={el.imageUrl} className="w-full h-auto" alt={el.name} />
+                                <div className="p-3 bg-slate-950/80">
+                                   <div className="text-xs font-bold text-white truncate">{el.name}</div>
+                                   <div className="text-[10px] text-slate-500 uppercase font-black">{el.type}</div>
+                                </div>
+                             </div>
+                          ))}
+                       </div>
+                    </section>
+                 )}
+              </div>
            )}
 
            {mode === AppMode.CHARACTER && (
@@ -687,7 +918,7 @@ export default function App() {
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={globalData.customApiKey || ''} elevenLabsKey={globalData.elevenLabsApiKey || ''} onUpdate={handleUpdateKeys} />
 
       {/* Footer / Prompt View */}
-      {mode !== AppMode.GLOBALS && mode !== AppMode.STORY && (
+      {mode !== AppMode.GLOBALS && mode !== AppMode.STORY && mode !== AppMode.CHRONICLE && (
         <div className="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-xl border-t border-yellow-500/20 shadow-2xl z-40 p-0 flex flex-col h-64">
            <div className="flex bg-slate-950/80 border-b border-slate-800">
             {activePrompts.map((p, idx) => (
@@ -719,7 +950,17 @@ export default function App() {
             <div key={idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[90%] p-4 rounded-2xl text-sm ${m.role === 'user' ? 'bg-indigo-600/20 border border-indigo-500/30 text-slate-100 rounded-tr-none' : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'}`}>
                 {m.text}
-                {m.image && (<div className="mt-4 flex flex-col gap-2"><div className="rounded-lg overflow-hidden border border-slate-700 shadow-2xl bg-slate-950 relative group"><img src={m.image} className="w-full h-auto" /><div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"><button onClick={() => handleImageDownload(m.image!, m.isMultiView, m.isStoryboard)} className="p-3 bg-yellow-500 text-slate-950 rounded-full hover:scale-110 transition-transform"><i className="fa-solid fa-download"></i></button></div></div><button onClick={() => handleSaveElement(mode, getContextName(), m.text.substring(0, 100), m.image!)} className="w-full py-2 bg-slate-700 hover:bg-green-600 text-white text-xs font-bold rounded flex items-center justify-center gap-2 transition-colors"><i className="fa-solid fa-floppy-disk"></i>Add to Registry</button></div>)}
+                {m.image && (<div className="mt-4 flex flex-col gap-2"><div className="rounded-lg overflow-hidden border border-slate-700 shadow-2xl bg-slate-950 relative group"><img src={m.image} className="w-full h-auto" /><div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"><button onClick={() => handleImageDownload(m.image!, m.isMultiView, m.isStoryboard)} className="p-3 bg-yellow-500 text-slate-950 rounded-full hover:scale-110 transition-transform"><i className="fa-solid fa-download"></i></button></div></div>
+                {m.isStoryboard && (
+                    <div className="grid grid-cols-4 gap-2">
+                        {[1,2,3,4].map(q => (
+                            <button key={q} onClick={() => handleUpscaleQuadrant(m.image!, q, m.text)} className="py-2 bg-slate-800 text-slate-300 text-[10px] font-bold uppercase rounded border border-slate-700 hover:bg-indigo-600 hover:text-white hover:border-indigo-500 transition-colors flex flex-col items-center gap-1">
+                                <i className="fa-solid fa-expand"></i> Panel {q}
+                            </button>
+                        ))}
+                    </div>
+                )}
+                <button onClick={() => handleSaveElement(mode, getContextName(), m.text.substring(0, 100), m.image!)} className="w-full py-2 bg-slate-700 hover:bg-green-600 text-white text-xs font-bold rounded flex items-center justify-center gap-2 transition-colors"><i className="fa-solid fa-floppy-disk"></i>Add to Registry</button></div>)}
                 {m.audioData && (<div className="mt-4 bg-slate-900 p-3 rounded-lg border border-slate-700 flex items-center gap-3"><button onClick={() => playAudio(m.audioData!)} className="w-10 h-10 rounded-full bg-pink-500 text-slate-950 flex items-center justify-center transition-transform hover:scale-105"><i className="fa-solid fa-play"></i></button><div className="flex-1 text-[10px] text-slate-400 uppercase tracking-widest font-black">Voice Output</div><button onClick={() => handleAudioDownload(m.audioData!, charData.voiceProvider === 'ElevenLabs')} className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center transition-colors hover:text-white"><i className="fa-solid fa-download"></i></button></div>)}
                 {idx === chatMessages.length - 1 && isTyping && <div className="mt-2 flex items-center gap-2"><span className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-bounce"></span><span className="text-[10px] text-yellow-500/60 font-black uppercase animate-pulse">{genStatus}</span></div>}
               </div>

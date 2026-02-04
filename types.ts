@@ -10,7 +10,8 @@ export enum AppMode {
   CHARACTER = 'Character',
   ENVIRONMENT = 'Environment',
   PROP = 'Prop',
-  STORY = 'Story'
+  STORY = 'Story',
+  CHRONICLE = 'Chronicle'
 }
 
 export interface User {
