@@ -1,4 +1,5 @@
 
+
 export enum DetailLevel {
   SIMPLE = 'Simple',
   INTERMEDIATE = 'Intermediate',
@@ -226,5 +227,6 @@ export interface RandomPool {
 declare global {
   interface Window {
     google?: any;
+    // aistudio is globally defined as AIStudio
   }
 }

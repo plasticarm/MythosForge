@@ -179,6 +179,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isRandomizing, setIsRandomizing] = useState(false);
   const [hasKey, setHasKey] = useState(false);
   const [genStatus, setGenStatus] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -424,10 +425,11 @@ export default function App() {
   const handleImageDownload = (imageUrl: string, isMultiView?: boolean, isStoryboard?: boolean) => { const name = getContextName().replace(/[^a-z0-9]/gi, '_'); const type = isMultiView ? 'MultiView' : isStoryboard ? 'Storyboard' : 'Visual'; const date = new Date().toISOString().slice(0,19).replace(/[:]/g, '-'); const filename = `${name}_${type}_${date}.png`; const link = document.createElement('a'); link.href = imageUrl; link.download = filename; document.body.appendChild(link); link.click(); document.body.removeChild(link); };
   const handleAudioDownload = (base64Data: string, isElevenLabs: boolean) => { const name = getContextName().replace(/[^a-z0-9]/gi, '_'); const date = new Date().toISOString().slice(0,19).replace(/[:]/g, '-'); const filename = `${name}_VoiceSample_${date}.${isElevenLabs ? 'mp3' : 'wav'}`; downloadAudio(base64Data, filename, isElevenLabs); };
 
-  const randomize = () => {
+  const randomize = async () => {
     const r = RANDOM_POOL;
     const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
 
+    // 1. Handle Globals Randomization (always random pool since it sets the context)
     if (mode === AppMode.GLOBALS) {
       setGlobalData({
         ...globalData,
@@ -436,7 +438,149 @@ export default function App() {
         genre: pick(r.genres),
         lightingTheme: pick(r.lightingThemes)
       });
-    } else if (mode === AppMode.CHARACTER) {
+      return;
+    }
+
+    // 2. Context-Aware AI Generation
+    const context = `Genre: ${globalData.genre}, Time Period: ${globalData.timePeriod}, Style: ${globalData.style}`;
+    const useAI = (globalData.genre || globalData.timePeriod || globalData.style) && (hasKey || getApiKey());
+
+    if (useAI) {
+        setIsRandomizing(true);
+        try {
+             const apiKey = getApiKey();
+             const ai = new GoogleGenAI({ apiKey });
+             let schema = null;
+             let prompt = "";
+
+             if (mode === AppMode.CHARACTER) {
+                 prompt = `Generate a detailed RPG character profile fitting this setting: ${context}. Fill all fields. For voiceProfile, pick one of: Puck, Charon, Kore, Fenrir, Zephyr.`;
+                 schema = {
+                    type: Type.OBJECT,
+                    properties: {
+                        name: { type: Type.STRING },
+                        species: { type: Type.STRING },
+                        role: { type: Type.STRING },
+                        archetype: { type: Type.STRING },
+                        personality: { type: Type.STRING },
+                        motivation: { type: Type.STRING },
+                        flaws: { type: Type.STRING },
+                        backstory: { type: Type.STRING },
+                        visualStyle: { type: Type.STRING },
+                        hairColor: { type: Type.STRING },
+                        eyeColor: { type: Type.STRING },
+                        height: { type: Type.STRING },
+                        build: { type: Type.STRING },
+                        distinguishingFeatures: { type: Type.STRING },
+                        skinTone: { type: Type.STRING },
+                        clothingStyle: { type: Type.STRING },
+                        postureGait: { type: Type.STRING },
+                        scent: { type: Type.STRING },
+                        alignment: { type: Type.STRING },
+                        phobias: { type: Type.STRING },
+                        hobbies: { type: Type.STRING },
+                        intelligence: { type: Type.STRING },
+                        placeOfBirth: { type: Type.STRING },
+                        socialClass: { type: Type.STRING },
+                        beliefs: { type: Type.STRING },
+                        languages: { type: Type.STRING },
+                        signatureWeapon: { type: Type.STRING },
+                        specialAbilities: { type: Type.STRING },
+                        combatStyle: { type: Type.STRING },
+                        reputation: { type: Type.STRING },
+                        allies: { type: Type.STRING },
+                        enemies: { type: Type.STRING },
+                        petCompanion: { type: Type.STRING },
+                        voiceProfile: { type: Type.STRING, enum: ["Puck", "Charon", "Kore", "Fenrir", "Zephyr"] },
+                        voiceDescription: { type: Type.STRING }
+                    }
+                 };
+             } else if (mode === AppMode.ENVIRONMENT) {
+                 prompt = `Generate a unique location/environment fitting this setting: ${context}.`;
+                 schema = {
+                    type: Type.OBJECT,
+                    properties: {
+                        name: { type: Type.STRING },
+                        biome: { type: Type.STRING },
+                        timeOfDay: { type: Type.STRING },
+                        weather: { type: Type.STRING },
+                        atmosphere: { type: Type.STRING },
+                        architecture: { type: Type.STRING },
+                        landmarks: { type: Type.STRING },
+                        history: { type: Type.STRING },
+                        lighting: { type: Type.STRING },
+                        visualStyle: { type: Type.STRING },
+                        scale: { type: Type.STRING },
+                        colors: { type: Type.STRING }
+                    }
+                 };
+             } else if (mode === AppMode.PROP) {
+                 prompt = `Generate a unique item/prop fitting this setting: ${context}.`;
+                 schema = {
+                    type: Type.OBJECT,
+                    properties: {
+                        name: { type: Type.STRING },
+                        category: { type: Type.STRING },
+                        material: { type: Type.STRING },
+                        size: { type: Type.STRING },
+                        weight: { type: Type.STRING },
+                        condition: { type: Type.STRING },
+                        origin: { type: Type.STRING },
+                        properties: { type: Type.STRING },
+                        visualDetails: { type: Type.STRING },
+                        history: { type: Type.STRING },
+                        visualStyle: { type: Type.STRING }
+                    }
+                 };
+             } else if (mode === AppMode.STORY) {
+                 prompt = `Generate a compelling story synopsis fitting this setting: ${context}.`;
+                 schema = {
+                    type: Type.OBJECT,
+                    properties: {
+                        synopsis: { type: Type.STRING }
+                    }
+                 };
+             }
+
+             if (schema) {
+                 const response = await ai.models.generateContent({
+                     model: 'gemini-3-flash-preview',
+                     contents: prompt,
+                     config: {
+                         responseMimeType: "application/json",
+                         responseSchema: schema
+                     }
+                 });
+                 if (response.text) {
+                     const data = JSON.parse(response.text);
+                     if (mode === AppMode.CHARACTER) setCharData({ ...charData, ...data });
+                     else if (mode === AppMode.ENVIRONMENT) setEnvData({ ...envData, ...data });
+                     else if (mode === AppMode.PROP) setPropData({ ...propData, ...data });
+                     else if (mode === AppMode.STORY) setStoryData({ ...storyData, ...data });
+                     return;
+                 }
+             }
+
+        } catch (e: any) {
+            // Enhanced error handling for leaked/invalid keys
+            const isKeyError = e.message?.includes("leaked") || e.status === 403 || e.message?.includes("API key");
+            
+            if (isKeyError) {
+                console.warn("AI Chaos: API Key invalid or leaked. Triggering re-selection.");
+                if (window.aistudio) {
+                    await window.aistudio.openSelectKey();
+                }
+            } else {
+                 console.error("AI Chaos failed, falling back to random pool", e);
+            }
+            // Fallthrough to random pool happens naturally after catch
+        } finally {
+            setIsRandomizing(false);
+        }
+    }
+
+    // 3. Fallback to Random Pool
+    if (mode === AppMode.CHARACTER) {
       setCharData({
         ...charData,
         name: pick(r.names),
@@ -564,7 +708,10 @@ export default function App() {
           </div>
           <div className="flex items-center gap-3">
              <button onClick={() => setIsSessionMenuOpen(true)} className="flex items-center gap-2 px-6 py-2.5 bg-slate-800 text-slate-300 border border-slate-700 rounded-full text-sm font-semibold transition-all hover:bg-slate-700"><i className="fa-solid fa-folder-open"></i> Session Manager</button>
-             <button onClick={randomize} className="flex items-center gap-2 px-6 py-2.5 bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 rounded-full text-sm font-semibold transition-all group"><i className="fa-solid fa-dice animate-spin-slow"></i> Chaos Seed</button>
+             <button onClick={randomize} disabled={isRandomizing} className="flex items-center gap-2 px-6 py-2.5 bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 rounded-full text-sm font-semibold transition-all group hover:bg-yellow-500/20 disabled:opacity-50">
+                <i className={`fa-solid fa-dice ${isRandomizing ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`}></i> 
+                {isRandomizing ? 'Dreaming...' : 'Chaos Seed'}
+             </button>
           </div>
         </div>
 
