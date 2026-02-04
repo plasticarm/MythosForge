@@ -156,6 +156,9 @@ export default function App() {
   const [genStatus, setGenStatus] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // --- Storyboard State ---
+  const [storyboardScene, setStoryboardScene] = useState('');
+
   useClickOutside(profileRef, () => setIsProfileOpen(false));
 
   const initialGlobalData: GlobalData = { 
@@ -322,10 +325,13 @@ export default function App() {
       const ai = new GoogleGenAI({ apiKey }); const contents: any = { parts: [] }; let promptPrefix = "";
       if (globalData.styleReferenceImages.length > 0) { globalData.styleReferenceImages.forEach(imgData => { contents.parts.push({ inlineData: { data: imgData.split(',')[1], mimeType: imgData.split(';')[0].split(':')[1] } }); }); promptPrefix += ` Use provided visual style.`; }
       if (specificRef) contents.parts.push({ inlineData: { data: specificRef.split(',')[1], mimeType: 'image/png' } }); else if (uploadedRef) contents.parts.push({ inlineData: { data: uploadedRef.split(',')[1], mimeType: 'image/png' } });
-      const finalPrompt = `${promptPrefix} Professional Concept Art: ${promptText}. Cinematic, 8k, ${globalData.style}.`; contents.parts.push({ text: finalPrompt });
+      const finalPrompt = isStoryboard 
+        ? `Graphic Novel Layout: ${promptText}. Style: ${globalData.style}. Create a sequence of panels depicting this scene. High contrast, dynamic storytelling.` 
+        : `${promptPrefix} Professional Concept Art: ${promptText}. Cinematic, 8k, ${globalData.style}.`; 
+      contents.parts.push({ text: finalPrompt });
       const response = await ai.models.generateContent({ model: 'gemini-3-pro-image-preview', contents, config: { imageConfig: { aspectRatio: isStoryboard ? "4:3" : globalData.aspectRatio, imageSize: globalData.imageQuality } } });
       let imageUrl = ''; if (response.candidates?.[0]?.content?.parts) { for (const part of response.candidates[0].content.parts) { if (part.inlineData) { imageUrl = `data:image/png;base64,${part.inlineData.data}`; break; } } }
-      if (imageUrl) setChatMessages(prev => [...prev, { role: 'model', text: `Visualized.`, image: imageUrl, isStoryboard, isMultiView }]); else throw new Error("Empty image payload");
+      if (imageUrl) setChatMessages(prev => [...prev, { role: 'model', text: isStoryboard ? `Storyboard generated for: ${promptText}` : `Visualized.`, image: imageUrl, isStoryboard, isMultiView }]); else throw new Error("Empty image payload");
     } catch (error: any) { setChatMessages(prev => [...prev, { role: 'model', text: `Visual Failed: ${error.message}.`, status: 'error' }]); } finally { setIsTyping(false); setGenStatus(''); }
   };
 
@@ -335,8 +341,92 @@ export default function App() {
 
   const randomize = () => {
     const r = RANDOM_POOL;
-    if (mode === AppMode.GLOBALS) { setGlobalData({ ...globalData, style: r.visualStyles[Math.floor(Math.random() * r.visualStyles.length)], timePeriod: r.timePeriods[Math.floor(Math.random() * r.timePeriods.length)], genre: r.genres[Math.floor(Math.random() * r.genres.length)], lightingTheme: r.lightingThemes[Math.floor(Math.random() * r.lightingThemes.length)] }); }
-    else if (mode === AppMode.CHARACTER) { setCharData({ ...charData, name: r.names[Math.floor(Math.random() * r.names.length)], species: r.species[Math.floor(Math.random() * r.species.length)], role: r.roles[Math.floor(Math.random() * r.roles.length)], archetype: r.archetypes[Math.floor(Math.random() * r.archetypes.length)], personality: r.personalityTraits[Math.floor(Math.random() * r.personalityTraits.length)] }); }
+    const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+
+    if (mode === AppMode.GLOBALS) {
+      setGlobalData({
+        ...globalData,
+        style: pick(r.visualStyles),
+        timePeriod: pick(r.timePeriods),
+        genre: pick(r.genres),
+        lightingTheme: pick(r.lightingThemes)
+      });
+    } else if (mode === AppMode.CHARACTER) {
+      setCharData({
+        ...charData,
+        name: pick(r.names),
+        species: pick(r.species),
+        role: pick(r.roles),
+        archetype: pick(r.archetypes),
+        personality: pick(r.personalityTraits),
+        motivation: pick(r.motivations),
+        flaws: pick(r.flaws),
+        backstory: pick(r.backstories),
+        visualStyle: pick(r.visualStyles),
+        hairColor: pick(r.hairColors),
+        eyeColor: pick(r.eyeColors),
+        height: pick(r.heights),
+        build: pick(r.builds),
+        distinguishingFeatures: pick(r.features),
+        skinTone: pick(r.skinTones),
+        clothingStyle: pick(r.clothing),
+        postureGait: pick(r.gaits),
+        scent: pick(r.scents),
+        alignment: pick(r.alignments),
+        phobias: pick(r.phobias),
+        hobbies: pick(r.hobbies),
+        intelligence: pick(r.intelligences),
+        placeOfBirth: pick(r.places),
+        socialClass: pick(r.socialClasses),
+        beliefs: pick(r.beliefs),
+        languages: pick(r.languages),
+        signatureWeapon: pick(r.weapons),
+        specialAbilities: pick(r.abilities),
+        combatStyle: pick(r.combatStyles),
+        reputation: pick(r.reputations),
+        allies: pick(r.allies),
+        enemies: pick(r.enemies),
+        petCompanion: pick(r.pets),
+        voiceProfile: pick(r.voices),
+        voiceDescription: pick(r.voiceDescriptions)
+      });
+    } else if (mode === AppMode.ENVIRONMENT) {
+        setEnvData({
+            ...envData,
+            name: `The ${pick(["Ancient", "Lost", "Silent", "Forbidden", "Neon", "Crystal"])} ${pick(r.biomes).split(' ').pop()}`,
+            biome: pick(r.biomes),
+            timeOfDay: pick(r.times),
+            weather: pick(r.weathers),
+            atmosphere: pick(r.atmospheres),
+            architecture: pick(r.architectures),
+            landmarks: pick(r.landmarks || ["Monolith", "Ruins", "Spire", "Gateway"]),
+            lighting: pick(r.lightingThemes),
+            visualStyle: pick(r.visualStyles),
+            history: pick(r.backstories), // Reusing general lore
+            colors: pick(r.hairColors), // Abstract color re-use
+            scale: pick(["Massive", "Claustrophobic", "Sprawling", "Vertical"]),
+        })
+    } else if (mode === AppMode.PROP) {
+        setPropData({
+            ...propData,
+            name: `${pick(r.conditions).split(' ')[0]} ${pick(r.materials)} ${pick(r.propCategories).split(' ').pop()}`,
+            category: pick(r.propCategories),
+            material: pick(r.materials),
+            condition: pick(r.conditions),
+            visualStyle: pick(r.visualStyles),
+            properties: pick(r.properties),
+            origin: pick(r.places),
+            size: pick(["Handheld", "Tiny", "Large", "Heavy"]),
+            weight: pick(["Feather-light", "Heavy", "Unwieldy"]),
+            visualDetails: pick(r.features),
+            history: pick(r.backstories)
+        })
+    } else if (mode === AppMode.STORY) {
+        setStoryData({
+            ...storyData,
+            synopsis: pick(r.storySynopses)
+        });
+    }
   };
 
   const getActivePrompts = () => {
@@ -420,18 +510,33 @@ export default function App() {
                     <button onClick={() => sendToAI(storyData.synopsis, true)} className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-white transition-all shadow-lg shadow-indigo-600/20">Generate Narrative</button>
                     <InputField label="Full Story" value={storyData.fullStory} onChange={(v) => setStoryData({...storyData, fullStory: v})} isTextArea rows={12} />
                  </section>
-                 <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4 h-fit">
-                    <SectionTitle title="Registry" icon="fa-box-archive" />
-                    <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
-                       {savedElements.length === 0 ? <div className="text-center py-12 text-slate-600 italic">Vault is empty.</div> : savedElements.map((el) => (
-                         <div key={el.id} className="flex gap-3 bg-slate-800 p-2 rounded-lg border border-slate-700">
-                             <div className="w-12 h-12 rounded bg-slate-700 overflow-hidden"><img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover" /></div>
-                             <div className="flex-1 min-w-0"><h4 className="font-bold text-sm truncate">{el.name}</h4><p className="text-[10px] text-slate-400 uppercase">{el.type}</p></div>
-                             <button onClick={() => setSavedElements(prev => prev.filter(x => x.id !== el.id))} className="text-slate-600 hover:text-red-400"><i className="fa-solid fa-trash"></i></button>
-                         </div>
-                       ))}
-                    </div>
-                 </section>
+
+                 <div className="space-y-4">
+                    <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
+                        <SectionTitle title="Storyboard Studio" icon="fa-clapperboard" />
+                        <InputField label="Scene Description" value={storyboardScene} onChange={setStoryboardScene} isTextArea placeholder="Describe the scene layout..." />
+                        <div className="flex flex-col gap-3">
+                            <button onClick={() => generateImage(storyboardScene, { isStoryboard: true })} className="w-full py-3 bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 hover:bg-yellow-500/20 rounded-lg font-bold transition-all flex items-center justify-center gap-2">
+                                <i className="fa-solid fa-table-cells-large"></i>Generate 4-Panel Layout
+                            </button>
+                            <button onClick={() => generateImage(storyboardScene, { isStoryboard: false })} className="w-full py-3 bg-slate-800 text-slate-300 hover:bg-slate-700 rounded-lg font-bold transition-all flex items-center justify-center gap-2">
+                                <i className="fa-solid fa-image"></i>Generate Cinematic Still
+                            </button>
+                        </div>
+                    </section>
+                    <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4 h-fit">
+                        <SectionTitle title="Registry" icon="fa-box-archive" />
+                        <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                           {savedElements.length === 0 ? <div className="text-center py-8 text-slate-600 italic text-xs">Vault is empty.</div> : savedElements.map((el) => (
+                             <div key={el.id} className="flex gap-3 bg-slate-950 p-2 rounded-lg border border-slate-800 hover:border-slate-600 transition-colors">
+                                 <div className="w-12 h-12 rounded bg-slate-800 overflow-hidden shrink-0"><img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover" /></div>
+                                 <div className="flex-1 min-w-0"><h4 className="font-bold text-xs truncate text-slate-300">{el.name}</h4><p className="text-[10px] text-slate-500 uppercase font-black">{el.type}</p></div>
+                                 <button onClick={() => setSavedElements(prev => prev.filter(x => x.id !== el.id))} className="text-slate-600 hover:text-red-500 px-2"><i className="fa-solid fa-trash"></i></button>
+                             </div>
+                           ))}
+                        </div>
+                    </section>
+                 </div>
               </>
            )}
 

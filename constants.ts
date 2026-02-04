@@ -22,6 +22,7 @@ export const RANDOM_POOL: RandomPool = {
   weathers: ["Luminous Rain", "Dense Fog", "Ash Fall", "Solar Storm", "Crystal Snow", "Static Lightning"],
   atmospheres: ["Ominous", "Serene", "Melancholic", "Tense", "Wondrous", "Claustrophobic"],
   architectures: ["Brutalist Concrete", "Elven Organic", "Victorian Steampunk", "High-tech Minimalism", "Ancient Monolithic"],
+  landmarks: ["Ancient Monolith", "Crumbling Statue", "Glowing Spire", "Mystic Gateway", "Holographic Billboard", "Overgrown Fountain", "Suspended Bridge"],
 
   // Prop Pools
   propCategories: ["Legendary Weapon", "Ancient Artifact", "High-tech Tool", "Enchanted Relic", "Lost Document"],
@@ -60,7 +61,19 @@ export const RANDOM_POOL: RandomPool = {
   secrets: ["Is actually the heir to the throne", "Murdered their brother", "Is a double agent", "Dying of a slow curse", "Has a hidden child", "Is an android believing they are human"],
   abilities: ["Pyrokinesis", "Invisibility", "Superhuman strength", "Time manipulation", "Tech-mancy", "Persuasive Charisma", "Shadow stepping"],
   pets: ["Robo-parrot", "Dire Wolf", "Surveillance Drone", "Spirit Wisp", "Giant Rat", "None", "Miniature Dragon"],
-  voiceDescriptions: ["Raspy and whispery", "Booming and authoritative", "Silky and deceptive", "Robotic and monotonous", "High-pitched and nervous", "Melodic and soothing", "Gravelly and menacing"]
+  voiceDescriptions: ["Raspy and whispery", "Booming and authoritative", "Silky and deceptive", "Robotic and monotonous", "High-pitched and nervous", "Melodic and soothing", "Gravelly and menacing"],
+  storySynopses: [
+    "A disgraced knight must escort a sentient artifact across a war-torn galaxy.",
+    "In a world where dreams are currency, a poor orphan discovers a nightmare that can kill.",
+    "A time-traveling historian accidentally alters the outcome of a pivotal ancient battle.",
+    "A detective in a noir city populated by robots discovers they are the only human left.",
+    "Three strangers wake up in a locked room with a countdown timer and no memory.",
+    "A deep-sea diver finds a city that shouldn't exist, and its lights are still on.",
+    "The sun hasn't risen in forty years, but today, the sky turned violet.",
+    "A rogue AI falls in love with a musician and tries to write the perfect symphony.",
+    "An interstellar courier is tasked with delivering a package that whispers to them.",
+    "A wizard loses their magic in a duel and must learn to fight with a sword."
+  ]
 };
 
 export const PROMPT_TEMPLATES = {

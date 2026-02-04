@@ -187,6 +187,7 @@ export interface RandomPool {
   weathers: string[];
   atmospheres: string[];
   architectures: string[];
+  landmarks: string[];
   propCategories: string[];
   materials: string[];
   conditions: string[];
@@ -218,6 +219,7 @@ export interface RandomPool {
   abilities: string[];
   pets: string[];
   voiceDescriptions: string[];
+  storySynopses: string[];
 }
 
 declare global {
