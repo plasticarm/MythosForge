@@ -385,6 +385,7 @@ export default function App() {
   const [level, setLevel] = useState<DetailLevel>(DetailLevel.SIMPLE);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [activeFooterTab, setActiveFooterTab] = useState(0);
+  const [isFooterMinimized, setIsFooterMinimized] = useState(false);
 
   // --- Session State ---
   const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
@@ -597,6 +598,12 @@ export default function App() {
   
   const handleUpscaleQuadrant = async (base64Image: string, quadrant: number, originalPrompt: string) => {
     try { const croppedImage = await cropImage(base64Image, quadrant); generateImage(originalPrompt, { isStoryboard: false, imageInput: croppedImage }); } catch (e) { console.error("Upscale failed", e); }
+  };
+
+  const handleExtractView = (base64Image: string, view: string) => {
+    const name = charData.name || "Character";
+    const prompt = PROMPT_TEMPLATES.characterSplitView(name, view);
+    generateImage(prompt, { specificRef: base64Image });
   };
 
   const getContextName = () => { switch(mode) { case AppMode.CHARACTER: return charData.name || 'Character'; case AppMode.ENVIRONMENT: return envData.name || 'Environment'; case AppMode.PROP: return propData.name || 'Prop'; default: return 'Session'; } };
@@ -815,7 +822,11 @@ export default function App() {
       <header className="py-6 px-4 md:px-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-3"><div className="w-10 h-10 bg-yellow-500 rounded-lg flex items-center justify-center shadow-lg shadow-yellow-500/20"><i className="fa-solid fa-bolt text-slate-900 text-xl"></i></div><h1 className="text-xl md:text-2xl font-bold tracking-tight text-white hidden sm:block">MythosForge</h1></div>
         <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-3 bg-slate-800 px-4 py-1.5 rounded-full border border-slate-700"><span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Workspace:</span><span className="text-xs font-bold text-slate-200">{currentSessionName}</span><button onClick={handleSaveSession} title="Save to Cloud" className="text-indigo-400 hover:text-white transition-colors"><i className={`fa-solid ${user ? 'fa-cloud-arrow-up' : 'fa-floppy-disk'}`}></i></button></div>
+          <div className="flex items-center gap-2 md:gap-3 bg-slate-800 px-3 md:px-4 py-1.5 rounded-full border border-slate-700">
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest hidden sm:inline">Workspace:</span>
+            <span className="text-xs font-bold text-slate-200 max-w-[80px] sm:max-w-none truncate">{currentSessionName}</span>
+            <button onClick={handleSaveSession} title="Save to Cloud" className="text-indigo-400 hover:text-white transition-colors"><i className={`fa-solid ${user ? 'fa-cloud-arrow-up' : 'fa-floppy-disk'}`}></i></button>
+          </div>
           <div className="h-8 w-px bg-slate-800"></div>
           {user ? (
               <button onClick={() => setIsProfileModalOpen(true)} className="flex items-center gap-3 group focus:outline-none">
@@ -969,34 +980,43 @@ export default function App() {
       <SessionModal isOpen={isSessionMenuOpen} onClose={() => setIsSessionMenuOpen(false)} sessions={sessions} currentName={currentSessionName} onRename={setCurrentSessionName} onSave={handleSaveSession} onLoad={handleLoadSession} onDelete={handleDeleteSession} onNew={handleNewSession} />
       {user && <ProfileModal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} user={user} onUpdateUser={handleUpdateUser} onLogout={handleLogout} />}
 
-      {/* Footer / Prompt View (Unchanged) */}
+      {/* Footer / Prompt View (Updated) */}
       {isFooterVisible && (
-        <div className="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-xl border-t border-yellow-500/20 shadow-2xl z-40 p-0 flex flex-col h-64">
+        <div className={`fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-xl border-t border-yellow-500/20 shadow-2xl z-40 p-0 flex flex-col transition-all duration-300 ${isFooterMinimized ? 'h-12' : 'h-64'}`}>
            <div className="flex bg-slate-950/80 border-b border-slate-800">
             {activePrompts.map((p, idx) => (
-              <button key={idx} onClick={() => setActiveFooterTab(idx)} className={`flex-1 py-3 text-xs font-bold uppercase transition-all flex items-center justify-center gap-2 ${activeFooterTab === idx ? 'text-yellow-500 bg-slate-900 border-t-2 border-yellow-500' : 'text-slate-500 hover:bg-slate-800'}`}>
+              <button key={idx} onClick={() => { setActiveFooterTab(idx); setIsFooterMinimized(false); }} className={`flex-1 py-3 text-xs font-bold uppercase transition-all flex items-center justify-center gap-2 ${activeFooterTab === idx && !isFooterMinimized ? 'text-yellow-500 bg-slate-900 border-t-2 border-yellow-500' : 'text-slate-500 hover:bg-slate-800'}`}>
                 <i className={`fa-solid ${p.icon}`}></i><span>{p.title}</span>
               </button>
             ))}
+            <button 
+                onClick={() => setIsFooterMinimized(!isFooterMinimized)}
+                className="px-4 bg-slate-900 text-slate-500 hover:text-white border-l border-slate-800 transition-colors"
+                title={isFooterMinimized ? "Expand" : "Minimize"}
+            >
+                <i className={`fa-solid fa-chevron-${isFooterMinimized ? 'up' : 'down'}`}></i>
+            </button>
           </div>
-          <div className="flex-1 p-6 overflow-hidden flex flex-col">
-             <div className="flex justify-between items-center mb-3">
-                 <h3 className="text-yellow-500 font-bold text-sm uppercase flex items-center gap-2"><i className={`fa-solid ${activePromptData?.icon}`}></i>{activePromptData?.title}</h3>
-                 <div className="flex gap-2">
-                    <button onClick={() => generateImage(activePromptData?.content || "", { isMultiView: activePromptData?.title.includes("Multi-View") })} className="px-4 py-1.5 bg-yellow-500/10 text-yellow-500 rounded text-xs font-black uppercase transition-all border border-yellow-500/30 flex items-center gap-2"><i className="fa-solid fa-image"></i>Visualize</button>
-                    {mode === AppMode.CHARACTER && <button onClick={() => generateVoice(activePromptData?.content.substring(0, 200) || "")} className="px-4 py-1.5 bg-pink-500/10 text-pink-500 rounded text-xs font-black uppercase transition-all border border-pink-500/30 flex items-center gap-2"><i className="fa-solid fa-microphone-lines"></i>Speak</button>}
-                    <button onClick={() => copyToClipboard(activePromptData?.content || "", activeFooterTab)} className={`px-4 py-1.5 rounded text-xs font-bold uppercase transition-all ${copiedIndex === activeFooterTab ? 'bg-green-600' : 'bg-slate-800 text-slate-300'}`}>{copiedIndex === activeFooterTab ? 'Copied' : 'Copy'}</button>
-                 </div>
-             </div>
-             <div className="flex-1 bg-slate-950 rounded-lg p-4 mono text-xs leading-relaxed text-slate-300 overflow-y-auto border border-slate-800"><pre className="whitespace-pre-wrap font-mono">{activePromptData?.content}</pre></div>
-          </div>
+          {!isFooterMinimized && (
+            <div className="flex-1 p-6 overflow-hidden flex flex-col">
+                <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-yellow-500 font-bold text-sm uppercase flex items-center gap-2"><i className={`fa-solid ${activePromptData?.icon}`}></i>{activePromptData?.title}</h3>
+                    <div className="flex gap-2">
+                        <button onClick={() => generateImage(activePromptData?.content || "", { isMultiView: activePromptData?.title.includes("Multi-View") })} className="px-4 py-1.5 bg-yellow-500/10 text-yellow-500 rounded text-xs font-black uppercase transition-all border border-yellow-500/30 flex items-center gap-2"><i className="fa-solid fa-image"></i>Visualize</button>
+                        {mode === AppMode.CHARACTER && <button onClick={() => generateVoice(activePromptData?.content.substring(0, 200) || "")} className="px-4 py-1.5 bg-pink-500/10 text-pink-500 rounded text-xs font-black uppercase transition-all border border-pink-500/30 flex items-center gap-2"><i className="fa-solid fa-microphone-lines"></i>Speak</button>}
+                        <button onClick={() => copyToClipboard(activePromptData?.content || "", activeFooterTab)} className={`px-4 py-1.5 rounded text-xs font-bold uppercase transition-all ${copiedIndex === activeFooterTab ? 'bg-green-600' : 'bg-slate-800 text-slate-300'}`}>{copiedIndex === activeFooterTab ? 'Copied' : 'Copy'}</button>
+                    </div>
+                </div>
+                <div className="flex-1 bg-slate-950 rounded-lg p-4 mono text-xs leading-relaxed text-slate-300 overflow-y-auto border border-slate-800"><pre className="whitespace-pre-wrap font-mono">{activePromptData?.content}</pre></div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* FAB and Chat */}
+      {/* FAB and Chat (Updated Position Logic) */}
       <button 
         onClick={() => setIsChatOpen(!isChatOpen)} 
-        className={`fixed right-4 md:right-8 w-14 h-14 bg-yellow-500 hover:bg-yellow-400 text-slate-950 rounded-full shadow-2xl z-50 flex items-center justify-center transition-all border-4 border-slate-900 active:scale-90 ${isFooterVisible ? 'bottom-72 md:bottom-72' : 'bottom-8'}`}
+        className={`fixed right-4 md:right-8 w-14 h-14 bg-yellow-500 hover:bg-yellow-400 text-slate-950 rounded-full shadow-2xl z-50 flex items-center justify-center transition-all border-4 border-slate-900 active:scale-90 ${!isFooterVisible ? 'bottom-8' : isFooterMinimized ? 'bottom-20' : 'bottom-72 md:bottom-72'}`}
       >
         <i className={`fa-solid ${isChatOpen ? 'fa-times' : 'fa-brain'} text-xl`}></i>
       </button>
@@ -1013,6 +1033,15 @@ export default function App() {
                 <button onClick={() => setActiveRefImage(activeRefImage === m.image ? null : m.image!)} className={`w-full py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${activeRefImage === m.image ? 'bg-yellow-500 text-slate-950 shadow-lg shadow-yellow-500/20' : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'}`}>
                     <i className={`fa-solid ${activeRefImage === m.image ? 'fa-lock' : 'fa-lock-open'}`}></i> {activeRefImage === m.image ? 'Locked as Ref' : 'Unlock Ref'}
                 </button>
+                {m.isMultiView && (
+                    <div className="grid grid-cols-3 gap-2">
+                        {['Front', 'Side', 'Back'].map(view => (
+                            <button key={view} onClick={() => handleExtractView(m.image!, view)} className="py-2 bg-slate-800 text-slate-300 text-[10px] font-bold uppercase rounded border border-slate-700 hover:bg-indigo-600 hover:text-white hover:border-indigo-500 transition-colors flex flex-col items-center gap-1">
+                                <i className={`fa-solid ${view === 'Front' ? 'fa-user' : view === 'Side' ? 'fa-arrow-right' : 'fa-user-slash'}`}></i> {view}
+                            </button>
+                        ))}
+                    </div>
+                )}
                 {m.isStoryboard && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         {[1,2,3,4].map(q => (
