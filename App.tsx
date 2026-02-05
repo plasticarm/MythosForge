@@ -1,6 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, GenerateContentResponse, Modality, Type } from "@google/genai";
+import JSZip from 'jszip';
+import { jsPDF } from 'jspdf';
 import { User, DetailLevel, AppMode, CharacterData, EnvironmentData, PropData, GlobalData, SavedElement, StoryData, Session, Message } from './types';
 import { RANDOM_POOL, PROMPT_TEMPLATES } from './constants';
 
@@ -79,6 +81,29 @@ const cropImage = (base64Image: string, quadrant: number): Promise<string> => {
   });
 };
 
+const urlToBase64 = (url: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject("Canvas error"); return; }
+      ctx.drawImage(img, 0, 0);
+      try {
+        const dataURL = canvas.toDataURL('image/png');
+        resolve(dataURL);
+      } catch (e) {
+        reject("CORS error: Cannot export tainted canvas");
+      }
+    };
+    img.onerror = () => reject("Image load failed");
+    img.src = url;
+  });
+};
+
 const useClickOutside = (ref: React.RefObject<HTMLElement | null>, handler: () => void) => {
   useEffect(() => {
     const listener = (event: MouseEvent | TouchEvent) => {
@@ -94,7 +119,90 @@ const useClickOutside = (ref: React.RefObject<HTMLElement | null>, handler: () =
   }, [ref, handler]);
 };
 
-// --- Components ---
+// --- Helper Components ---
+
+const InputField: React.FC<{ 
+  label: string; 
+  value: string; 
+  onChange: (val: string) => void; 
+  type?: string; 
+  placeholder?: string; 
+  isTextArea?: boolean; 
+  rows?: number; 
+}> = ({ label, value, onChange, type = "text", placeholder, isTextArea, rows = 4 }) => (
+  <div className="flex flex-col gap-1.5 w-full">
+    <label className="text-xs font-medium text-slate-400">{label}</label>
+    {isTextArea ? (
+        <textarea 
+            value={value} 
+            onChange={(e) => onChange(e.target.value)} 
+            rows={rows} 
+            placeholder={placeholder}
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-base md:text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50 resize-y transition-all placeholder:text-slate-700" 
+        />
+    ) : (
+        <input 
+            type={type} 
+            value={value} 
+            onChange={(e) => onChange(e.target.value)} 
+            placeholder={placeholder}
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-base md:text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all placeholder:text-slate-700" 
+        />
+    )}
+  </div>
+);
+
+const SectionTitle: React.FC<{ title: string; icon: string }> = ({ title, icon }) => (
+    <h3 className="text-yellow-500 font-bold text-xs uppercase tracking-widest flex items-center gap-2 mb-2">
+        <i className={`fa-solid ${icon}`}></i> {title}
+    </h3>
+);
+
+const VisualReference: React.FC<{ imageData?: string; onUpload: (img: string) => void; onClear: () => void }> = ({ imageData, onUpload, onClear }) => {
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files?.[0]) {
+            const reader = new FileReader();
+            reader.onloadend = () => onUpload(reader.result as string);
+            reader.readAsDataURL(e.target.files[0]);
+        }
+    };
+    return (
+        <div className="flex flex-col gap-2">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Visual Reference</label>
+            <div className="flex items-center gap-4 bg-slate-950 p-3 rounded-lg border border-slate-800 border-dashed hover:border-slate-600 transition-colors">
+                <div className="w-16 h-16 bg-slate-900 rounded-md overflow-hidden flex items-center justify-center shrink-0 border border-slate-800 relative group">
+                    {imageData ? (
+                        <>
+                            <img src={imageData} className="w-full h-full object-cover" alt="Ref" />
+                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <button onClick={onClear} className="text-white hover:text-red-400"><i className="fa-solid fa-trash"></i></button>
+                            </div>
+                        </>
+                    ) : (
+                        <i className="fa-solid fa-image text-slate-700 text-2xl"></i>
+                    )}
+                </div>
+                <div className="flex-1">
+                    <input type="file" ref={fileInputRef} onChange={handleFile} className="hidden" accept="image/*" />
+                    <button onClick={() => fileInputRef.current?.click()} className="text-xs font-bold text-indigo-400 hover:text-indigo-300">
+                        {imageData ? "Change Image" : "Upload Reference Image"}
+                    </button>
+                    <p className="text-[10px] text-slate-500 mt-1">Used to guide visual generation (Optional)</p>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const AssetManager: React.FC<{ library: any[]; currentId?: string; onLoad: (id: string) => void; onSave: () => void; onNew: () => void; onDelete: () => void; label: string; }> = ({ library, currentId, onLoad, onSave, onNew, onDelete, label }) => (
+  <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row gap-4 items-center mb-6 shadow-lg">
+    <div className="flex-1 w-full flex flex-col gap-1"><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{label} Stack</label><select value={currentId || ""} onChange={(e) => onLoad(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-base md:text-sm text-slate-200 outline-none focus:ring-2 focus:ring-yellow-500/30"><option value="">-- Workspace Draft --</option>{library.map((item: any) => (<option key={item.id} value={item.id}>{item.name || "Untitled"}</option>))}</select></div>
+    <div className="flex gap-2 w-full sm:w-auto pt-5"><button onClick={onNew} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg transition-colors border border-slate-700" title="New Draft"><i className="fa-solid fa-plus"></i></button><button onClick={onSave} className="flex-1 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2"><i className="fa-solid fa-floppy-disk"></i>Save Stack</button>{currentId && <button onClick={onDelete} className="p-2 text-slate-600 hover:text-red-500 transition-colors"><i className="fa-solid fa-trash"></i></button>}</div>
+  </div>
+);
+
+// --- Modals ---
 
 const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; onLogin: (user: User) => void; }> = ({ isOpen, onClose, onLogin }) => {
   if (!isOpen) return null;
@@ -134,7 +242,7 @@ const SessionModal: React.FC<{ isOpen: boolean; onClose: () => void; sessions: S
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-500 uppercase">Current Workspace Name</label>
             <div className="flex gap-2">
-              <input type="text" value={currentName} onChange={(e) => onRename(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-yellow-500/30" />
+              <input type="text" value={currentName} onChange={(e) => onRename(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-base md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-yellow-500/30" />
               <button onClick={onSave} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-500 transition-colors">Save</button>
             </div>
           </div>
@@ -155,14 +263,124 @@ const SessionModal: React.FC<{ isOpen: boolean; onClose: () => void; sessions: S
   );
 };
 
+const ProfileModal: React.FC<{ isOpen: boolean; onClose: () => void; user: User; onUpdateUser: (user: User) => void; onLogout: () => void; }> = ({ isOpen, onClose, user, onUpdateUser, onLogout }) => {
+  const modalRef = useRef<HTMLDivElement>(null);
+  const [name, setName] = useState(user.name);
+  const [avatar, setAvatar] = useState(user.picture);
+  const [avatarUrlInput, setAvatarUrlInput] = useState('');
+  const [geminiKey, setGeminiKey] = useState(user.apiKeys.gemini || '');
+  const [elevenLabsKey, setElevenLabsKey] = useState(user.apiKeys.elevenLabs || '');
+  const [showKeys, setShowKeys] = useState(false);
+  const [isUrlMode, setIsUrlMode] = useState(false);
+
+  useClickOutside(modalRef, onClose);
+
+  useEffect(() => {
+    setName(user.name);
+    setAvatar(user.picture);
+    setGeminiKey(user.apiKeys.gemini || '');
+    setElevenLabsKey(user.apiKeys.elevenLabs || '');
+  }, [user, isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleSave = () => {
+    onUpdateUser({
+        ...user,
+        name,
+        picture: avatar,
+        apiKeys: {
+            gemini: geminiKey,
+            elevenLabs: elevenLabsKey
+        }
+    });
+    onClose();
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+        const reader = new FileReader();
+        reader.onloadend = () => setAvatar(reader.result as string);
+        reader.readAsDataURL(e.target.files[0]);
+    }
+  };
+
+  const handleUrlLoad = async () => {
+      try {
+          const base64 = await urlToBase64(avatarUrlInput);
+          setAvatar(base64);
+          setIsUrlMode(false);
+          setAvatarUrlInput('');
+      } catch (e) {
+          alert('Failed to load image. Try another URL.');
+      }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+      <div ref={modalRef} className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+        <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+            <div className="flex items-center gap-3">
+                <i className="fa-solid fa-id-card text-yellow-500"></i>
+                <h2 className="text-xl font-bold text-white">Architect Profile</h2>
+            </div>
+            <button onClick={onClose} className="text-slate-500 hover:text-white"><i className="fa-solid fa-xmark"></i></button>
+        </div>
+        <div className="p-6 space-y-6 overflow-y-auto max-h-[80vh]">
+            {/* Avatar Section */}
+            <div className="flex flex-col items-center gap-4">
+                <div className="relative group w-24 h-24 rounded-full overflow-hidden border-2 border-slate-700 shadow-lg">
+                    <img src={avatar} alt="Avatar" className="w-full h-full object-cover" />
+                    <label className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
+                        <i className="fa-solid fa-camera text-white"></i>
+                        <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+                    </label>
+                </div>
+                {isUrlMode ? (
+                    <div className="flex gap-2 w-full">
+                        <input type="text" value={avatarUrlInput} onChange={e => setAvatarUrlInput(e.target.value)} placeholder="Image URL..." className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1 text-xs text-white" />
+                        <button onClick={handleUrlLoad} className="px-3 bg-indigo-600 text-white rounded-lg text-xs font-bold">Load</button>
+                        <button onClick={() => setIsUrlMode(false)} className="text-slate-500"><i className="fa-solid fa-xmark"></i></button>
+                    </div>
+                ) : (
+                    <button onClick={() => setIsUrlMode(true)} className="text-xs text-indigo-400 hover:text-indigo-300 font-bold">Import from URL</button>
+                )}
+            </div>
+
+            {/* Name Section */}
+            <InputField label="Display Name" value={name} onChange={setName} />
+
+            {/* API Keys */}
+            <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-3">
+                <div className="flex justify-between items-center cursor-pointer" onClick={() => setShowKeys(!showKeys)}>
+                    <label className="text-xs font-black text-slate-500 uppercase tracking-widest cursor-pointer">API Credentials</label>
+                    <i className={`fa-solid fa-chevron-${showKeys ? 'up' : 'down'} text-slate-600 text-xs`}></i>
+                </div>
+                {showKeys && (
+                    <div className="space-y-3 pt-2 animate-in slide-in-from-top-2">
+                        <InputField label="Google Gemini API Key" type="password" value={geminiKey} onChange={setGeminiKey} />
+                        <InputField label="ElevenLabs API Key" type="password" value={elevenLabsKey} onChange={setElevenLabsKey} />
+                    </div>
+                )}
+            </div>
+
+            <div className="flex flex-col gap-3 pt-2">
+                <button onClick={handleSave} className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-indigo-600/20">Save Changes</button>
+                <button onClick={onLogout} className="w-full py-3 bg-slate-800 hover:bg-red-900/20 hover:text-red-400 text-slate-400 font-bold rounded-xl transition-all border border-slate-700 hover:border-red-900/50">Sign Out</button>
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // --- Main App ---
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isProfileOpen, setIsProfileOpen] = useState(false); 
-  const profileRef = useRef<HTMLDivElement>(null);
-
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  
   const [mode, setMode] = useState<AppMode>(AppMode.GLOBALS);
   const [level, setLevel] = useState<DetailLevel>(DetailLevel.SIMPLE);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -170,7 +388,6 @@ export default function App() {
 
   // --- Session State ---
   const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionName, setCurrentSessionName] = useState('New Chronicle');
 
@@ -184,10 +401,14 @@ export default function App() {
   const [genStatus, setGenStatus] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // --- Consistency Lock State ---
+  const [activeRefImage, setActiveRefImage] = useState<string | null>(null);
+  
+  // --- Hover Inspection State ---
+  const [hoveredImage, setHoveredImage] = useState<string | null>(null);
+
   // --- Storyboard State ---
   const [storyboardScene, setStoryboardScene] = useState('');
-
-  useClickOutside(profileRef, () => setIsProfileOpen(false));
 
   const initialGlobalData: GlobalData = { 
     style: '', timePeriod: '', genre: '', lightingTheme: '', colorPalette: '', customApiKey: '',
@@ -217,6 +438,9 @@ export default function App() {
   // --- Logic Hooks ---
   const showIntermediate = level === DetailLevel.INTERMEDIATE || level === DetailLevel.COMPLEX;
   const showComplex = level === DetailLevel.COMPLEX;
+  
+  // Footer is hidden in Globals, Story, and Chronicle modes
+  const isFooterVisible = mode !== AppMode.GLOBALS && mode !== AppMode.STORY && mode !== AppMode.CHRONICLE;
 
   useEffect(() => {
     const savedUser = localStorage.getItem('mythos_forge_user');
@@ -246,7 +470,27 @@ export default function App() {
   };
 
   const handleLogin = (newUser: User) => { localStorage.setItem('mythos_forge_user', JSON.stringify(newUser)); setUser(newUser); };
-  const handleLogout = () => { if (window.confirm("Disconnect?")) { localStorage.removeItem('mythos_forge_user'); setUser(null); setIsAuthModalOpen(true); } };
+  
+  const handleUpdateUser = (updatedUser: User) => {
+    setUser(updatedUser);
+    localStorage.setItem('mythos_forge_user', JSON.stringify(updatedUser));
+    if (updatedUser.apiKeys) {
+         setGlobalData(prev => ({
+            ...prev,
+            customApiKey: updatedUser.apiKeys.gemini || prev.customApiKey,
+            elevenLabsApiKey: updatedUser.apiKeys.elevenLabs || prev.elevenLabsApiKey
+        }));
+    }
+  };
+
+  const handleLogout = () => { 
+      if (window.confirm("Disconnect?")) { 
+          localStorage.removeItem('mythos_forge_user'); 
+          setUser(null); 
+          setIsProfileModalOpen(false);
+          setIsAuthModalOpen(true); 
+      } 
+  };
 
   const handleSaveSession = () => {
     const sessionData: Session = { id: Date.now().toString(), userId: user?.id || 'guest', name: currentSessionName || 'Untitled Session', lastModified: Date.now(), data: { mode, globalData, charData, characterLibrary, envData, environmentLibrary, propData, propLibrary, storyData, savedElements, chatMessages } };
@@ -254,15 +498,6 @@ export default function App() {
     let newSessions = existingIndex >= 0 ? [...sessions] : [...sessions, sessionData];
     if (existingIndex >= 0) newSessions[existingIndex] = sessionData;
     saveSessionsToStorage(newSessions);
-  };
-
-  const handleUpdateKeys = (gemini?: string, eleven?: string) => {
-    if (user) {
-        const updatedUser = { ...user, apiKeys: { ...user.apiKeys, gemini: gemini || user.apiKeys.gemini, elevenLabs: eleven || user.apiKeys.elevenLabs } };
-        setUser(updatedUser);
-        localStorage.setItem('mythos_forge_user', JSON.stringify(updatedUser));
-    }
-    setGlobalData(prev => ({ ...prev, customApiKey: gemini || prev.customApiKey, elevenLabsApiKey: eleven || prev.elevenLabsApiKey }));
   };
 
   const handleLoadSession = (session: Session) => {
@@ -274,33 +509,18 @@ export default function App() {
   const handleNewSession = () => { if (window.confirm("Fresh chronicle?")) { setGlobalData(initialGlobalData); setCharData(initialCharData); setCharacterLibrary([]); setEnvData(initialEnvData); setEnvironmentLibrary([]); setPropData(initialPropData); setPropLibrary([]); setStoryData({ synopsis: '', fullStory: '', storyScenes: [] }); setSavedElements([]); setChatMessages([]); setCurrentSessionName('New Chronicle'); setMode(AppMode.GLOBALS); setIsSessionMenuOpen(false); } };
 
   // Asset Handlers
-  const saveCharacter = () => {
-      const newChar = { ...charData, id: charData.id || Date.now().toString() };
-      setCharacterLibrary(prev => { const idx = prev.findIndex(c => c.id === newChar.id); const updated = idx >= 0 ? [...prev] : [...prev, newChar]; if (idx >= 0) updated[idx] = newChar; return updated; });
-      setCharData(newChar);
-  };
+  const saveCharacter = () => { const newChar = { ...charData, id: charData.id || Date.now().toString() }; setCharacterLibrary(prev => { const idx = prev.findIndex(c => c.id === newChar.id); const updated = idx >= 0 ? [...prev] : [...prev, newChar]; if (idx >= 0) updated[idx] = newChar; return updated; }); setCharData(newChar); };
   const loadCharacter = (id: string) => { const found = characterLibrary.find(c => c.id === id); if (found) setCharData(found); else setCharData(initialCharData); };
   const deleteCharacter = () => { if (window.confirm("Delete character?")) { setCharacterLibrary(prev => prev.filter(c => c.id !== charData.id)); setCharData(initialCharData); } };
   const newCharacter = () => setCharData(initialCharData);
-
-  const saveEnvironment = () => {
-      const newEnv = { ...envData, id: envData.id || Date.now().toString() };
-      setEnvironmentLibrary(prev => { const idx = prev.findIndex(e => e.id === newEnv.id); const updated = idx >= 0 ? [...prev] : [...prev, newEnv]; if (idx >= 0) updated[idx] = newEnv; return updated; });
-      setEnvData(newEnv);
-  };
+  const saveEnvironment = () => { const newEnv = { ...envData, id: envData.id || Date.now().toString() }; setEnvironmentLibrary(prev => { const idx = prev.findIndex(e => e.id === newEnv.id); const updated = idx >= 0 ? [...prev] : [...prev, newEnv]; if (idx >= 0) updated[idx] = newEnv; return updated; }); setEnvData(newEnv); };
   const loadEnvironment = (id: string) => { const found = environmentLibrary.find(e => e.id === id); if (found) setEnvData(found); else setEnvData(initialEnvData); };
   const deleteEnvironment = () => { if (window.confirm("Delete environment?")) { setEnvironmentLibrary(prev => prev.filter(e => e.id !== envData.id)); setEnvData(initialEnvData); } };
   const newEnvironment = () => setEnvData(initialEnvData);
-
-  const saveProp = () => {
-      const newProp = { ...propData, id: propData.id || Date.now().toString() };
-      setPropLibrary(prev => { const idx = prev.findIndex(p => p.id === newProp.id); const updated = idx >= 0 ? [...prev] : [...prev, newProp]; if (idx >= 0) updated[idx] = newProp; return updated; });
-      setPropData(newProp);
-  };
+  const saveProp = () => { const newProp = { ...propData, id: propData.id || Date.now().toString() }; setPropLibrary(prev => { const idx = prev.findIndex(p => p.id === newProp.id); const updated = idx >= 0 ? [...prev] : [...prev, newProp]; if (idx >= 0) updated[idx] = newProp; return updated; }); setPropData(newProp); };
   const loadProp = (id: string) => { const found = propLibrary.find(p => p.id === id); if (found) setPropData(found); else setPropData(initialPropData); };
   const deleteProp = () => { if (window.confirm("Delete prop?")) { setPropLibrary(prev => prev.filter(p => p.id !== propData.id)); setPropData(initialPropData); } };
   const newProp = () => setPropData(initialPropData);
-
   const handleSaveElement = (type: AppMode, name: string, desc: string, imageUrl: string) => { setSavedElements(prev => [...prev, { id: Date.now().toString(), type, name, description: desc, imageUrl }]); };
 
   const checkKey = async () => { if ((window.aistudio && await window.aistudio.hasSelectedApiKey()) || (globalData.customApiKey && globalData.customApiKey.length > 10)) setHasKey(true); else setHasKey(false); };
@@ -328,34 +548,12 @@ export default function App() {
     if (!storyData.fullStory) return;
     const apiKey = getApiKey();
     if (!hasKey && !apiKey) { await handleOpenKey(); return; }
-    
-    setIsTyping(true);
-    setGenStatus('Deconstructing narrative...');
+    setIsTyping(true); setGenStatus('Deconstructing narrative...');
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: storyData.fullStory,
-        config: {
-          systemInstruction: "You are a storyboard director. Analyze the provided story and break it down into a list of 4-8 visual scene descriptions suitable for generating storyboard panels. Return ONLY a JSON array of strings.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          }
-        }
-      });
-      
-      if (response.text) {
-        const scenes = JSON.parse(response.text);
-        setStoryData(prev => ({ ...prev, storyScenes: scenes }));
-      }
-    } catch (error: any) {
-      setChatMessages(prev => [...prev, { role: 'model', text: `Analysis Failed: ${error.message}.`, status: 'error' }]);
-    } finally {
-      setIsTyping(false);
-      setGenStatus('');
-    }
+      const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: storyData.fullStory, config: { systemInstruction: "You are a storyboard director. Analyze the provided story and break it down into a list of 4-8 visual scene descriptions suitable for generating storyboard panels. Return ONLY a JSON array of strings.", responseMimeType: "application/json", responseSchema: { type: Type.ARRAY, items: { type: Type.STRING } } } });
+      if (response.text) { const scenes = JSON.parse(response.text); setStoryData(prev => ({ ...prev, storyScenes: scenes })); }
+    } catch (error: any) { setChatMessages(prev => [...prev, { role: 'model', text: `Analysis Failed: ${error.message}.`, status: 'error' }]); } finally { setIsTyping(false); setGenStatus(''); }
   };
 
   const generateVoice = async (textToSpeak: string) => {
@@ -382,318 +580,253 @@ export default function App() {
     const { isStoryboard = false, isMultiView = false, specificRef, imageInput } = options;
     const apiKey = getApiKey(); if (!hasKey && !apiKey) { await handleOpenKey(); return; }
     let uploadedRef: string | undefined; if (mode === AppMode.CHARACTER) uploadedRef = charData.customImage; else if (mode === AppMode.ENVIRONMENT) uploadedRef = envData.customImage; else if (mode === AppMode.PROP) uploadedRef = propData.customImage;
-    
-    // Context building
     const savedContext = savedElements.map(e => `[Saved ${e.type} Reference]: ${e.name} - ${e.description}`).join('\n');
     const fullContextPrompt = `Context from Registry:\n${savedContext}\n\nScene Description: ${promptText}`;
-
     setIsChatOpen(true); setIsTyping(true); setGenStatus(imageInput ? 'Upscaling Detail...' : 'Visual manifesting...');
     try {
       const ai = new GoogleGenAI({ apiKey }); const contents: any = { parts: [] }; let promptPrefix = "";
       if (globalData.styleReferenceImages.length > 0) { globalData.styleReferenceImages.forEach(imgData => { contents.parts.push({ inlineData: { data: imgData.split(',')[1], mimeType: imgData.split(';')[0].split(':')[1] } }); }); promptPrefix += ` Use provided visual style.`; }
-      
-      if (imageInput) {
-        contents.parts.push({ inlineData: { data: imageInput.split(',')[1], mimeType: 'image/png' } });
-        promptPrefix += " Refine and upscale this composition. ";
-      } else if (specificRef) {
-        contents.parts.push({ inlineData: { data: specificRef.split(',')[1], mimeType: 'image/png' } });
-      } else if (uploadedRef) {
-        contents.parts.push({ inlineData: { data: uploadedRef.split(',')[1], mimeType: 'image/png' } }); 
-      }
-
-      const finalPrompt = isStoryboard 
-        ? `${promptPrefix} Comic Book Page Layout: 4-panel grid (2x2). Scene: ${fullContextPrompt}. Style: ${globalData.style}. High contrast, dynamic angles, consistent character details from registry.` 
-        : `${promptPrefix} Professional Concept Art: ${fullContextPrompt}. Cinematic, 8k, ${globalData.style}.`; 
+      if (activeRefImage) { contents.parts.push({ inlineData: { data: activeRefImage.split(',')[1], mimeType: 'image/png' } }); promptPrefix += " [Strict Consistency Reference] Maintain specific character/object details from this reference image. "; } else if (imageInput) { contents.parts.push({ inlineData: { data: imageInput.split(',')[1], mimeType: 'image/png' } }); promptPrefix += " Refine and upscale this composition. "; } else if (specificRef) { contents.parts.push({ inlineData: { data: specificRef.split(',')[1], mimeType: 'image/png' } }); } else if (uploadedRef) { contents.parts.push({ inlineData: { data: uploadedRef.split(',')[1], mimeType: 'image/png' } }); promptPrefix += " [Reference Image] Use this as a guide for visual appearance. "; }
+      const finalPrompt = isStoryboard ? `${promptPrefix} Comic Book Page Layout: 4-panel grid (2x2). Scene: ${fullContextPrompt}. Style: ${globalData.style}. High contrast, dynamic angles, consistent character details from registry.` : `${promptPrefix} Professional Concept Art: ${fullContextPrompt}. Cinematic, 8k, ${globalData.style}.`; 
       contents.parts.push({ text: finalPrompt });
-      
       const response = await ai.models.generateContent({ model: 'gemini-3-pro-image-preview', contents, config: { imageConfig: { aspectRatio: isStoryboard ? "4:3" : globalData.aspectRatio, imageSize: globalData.imageQuality } } });
       let imageUrl = ''; if (response.candidates?.[0]?.content?.parts) { for (const part of response.candidates[0].content.parts) { if (part.inlineData) { imageUrl = `data:image/png;base64,${part.inlineData.data}`; break; } } }
-      if (imageUrl) setChatMessages(prev => [...prev, { role: 'model', text: isStoryboard ? `Storyboard generated: ${promptText}` : `Visualized.`, image: imageUrl, isStoryboard, isMultiView }]); else throw new Error("Empty image payload");
+      if (imageUrl) { setChatMessages(prev => [...prev, { role: 'model', text: isStoryboard ? `Storyboard generated: ${promptText}` : `Visualized.`, image: imageUrl, isStoryboard, isMultiView }]); setActiveRefImage(imageUrl); } else throw new Error("Empty image payload");
     } catch (error: any) { setChatMessages(prev => [...prev, { role: 'model', text: `Visual Failed: ${error.message}.`, status: 'error' }]); } finally { setIsTyping(false); setGenStatus(''); }
   };
   
   const handleUpscaleQuadrant = async (base64Image: string, quadrant: number, originalPrompt: string) => {
-    try {
-        const croppedImage = await cropImage(base64Image, quadrant);
-        generateImage(originalPrompt, { isStoryboard: false, imageInput: croppedImage });
-    } catch (e) {
-        console.error("Upscale failed", e);
-    }
+    try { const croppedImage = await cropImage(base64Image, quadrant); generateImage(originalPrompt, { isStoryboard: false, imageInput: croppedImage }); } catch (e) { console.error("Upscale failed", e); }
   };
 
   const getContextName = () => { switch(mode) { case AppMode.CHARACTER: return charData.name || 'Character'; case AppMode.ENVIRONMENT: return envData.name || 'Environment'; case AppMode.PROP: return propData.name || 'Prop'; default: return 'Session'; } };
   const handleImageDownload = (imageUrl: string, isMultiView?: boolean, isStoryboard?: boolean) => { const name = getContextName().replace(/[^a-z0-9]/gi, '_'); const type = isMultiView ? 'MultiView' : isStoryboard ? 'Storyboard' : 'Visual'; const date = new Date().toISOString().slice(0,19).replace(/[:]/g, '-'); const filename = `${name}_${type}_${date}.png`; const link = document.createElement('a'); link.href = imageUrl; link.download = filename; document.body.appendChild(link); link.click(); document.body.removeChild(link); };
   const handleAudioDownload = (base64Data: string, isElevenLabs: boolean) => { const name = getContextName().replace(/[^a-z0-9]/gi, '_'); const date = new Date().toISOString().slice(0,19).replace(/[:]/g, '-'); const filename = `${name}_VoiceSample_${date}.${isElevenLabs ? 'mp3' : 'wav'}`; downloadAudio(base64Data, filename, isElevenLabs); };
+  
+  const randomize = async () => { const r = RANDOM_POOL; const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)]; if (mode === AppMode.GLOBALS) { setGlobalData({ ...globalData, style: pick(r.visualStyles), timePeriod: pick(r.timePeriods), genre: pick(r.genres), lightingTheme: pick(r.lightingThemes) }); return; } const context = `Genre: ${globalData.genre}, Time Period: ${globalData.timePeriod}, Style: ${globalData.style}`; const useAI = (globalData.genre || globalData.timePeriod || globalData.style) && (hasKey || getApiKey()); if (useAI) { setIsRandomizing(true); try { const apiKey = getApiKey(); const ai = new GoogleGenAI({ apiKey }); let schema = null; let prompt = ""; if (mode === AppMode.CHARACTER) { prompt = `Generate a detailed RPG character profile fitting this setting: ${context}. Fill all fields. For voiceProfile, pick one of: Puck, Charon, Kore, Fenrir, Zephyr.`; schema = { type: Type.OBJECT, properties: { name: { type: Type.STRING }, species: { type: Type.STRING }, role: { type: Type.STRING }, archetype: { type: Type.STRING }, personality: { type: Type.STRING }, motivation: { type: Type.STRING }, flaws: { type: Type.STRING }, backstory: { type: Type.STRING }, visualStyle: { type: Type.STRING }, hairColor: { type: Type.STRING }, eyeColor: { type: Type.STRING }, height: { type: Type.STRING }, build: { type: Type.STRING }, distinguishingFeatures: { type: Type.STRING }, skinTone: { type: Type.STRING }, clothingStyle: { type: Type.STRING }, postureGait: { type: Type.STRING }, scent: { type: Type.STRING }, alignment: { type: Type.STRING }, phobias: { type: Type.STRING }, hobbies: { type: Type.STRING }, intelligence: { type: Type.STRING }, placeOfBirth: { type: Type.STRING }, socialClass: { type: Type.STRING }, beliefs: { type: Type.STRING }, languages: { type: Type.STRING }, signatureWeapon: { type: Type.STRING }, specialAbilities: { type: Type.STRING }, combatStyle: { type: Type.STRING }, reputation: { type: Type.STRING }, allies: { type: Type.STRING }, enemies: { type: Type.STRING }, petCompanion: { type: Type.STRING }, voiceProfile: { type: Type.STRING, enum: ["Puck", "Charon", "Kore", "Fenrir", "Zephyr"] }, voiceDescription: { type: Type.STRING } } }; } else if (mode === AppMode.ENVIRONMENT) { prompt = `Generate a unique location/environment fitting this setting: ${context}.`; schema = { type: Type.OBJECT, properties: { name: { type: Type.STRING }, biome: { type: Type.STRING }, timeOfDay: { type: Type.STRING }, weather: { type: Type.STRING }, atmosphere: { type: Type.STRING }, architecture: { type: Type.STRING }, landmarks: { type: Type.STRING }, history: { type: Type.STRING }, lighting: { type: Type.STRING }, visualStyle: { type: Type.STRING }, scale: { type: Type.STRING }, colors: { type: Type.STRING } } }; } else if (mode === AppMode.PROP) { prompt = `Generate a unique item/prop fitting this setting: ${context}.`; schema = { type: Type.OBJECT, properties: { name: { type: Type.STRING }, category: { type: Type.STRING }, material: { type: Type.STRING }, size: { type: Type.STRING }, weight: { type: Type.STRING }, condition: { type: Type.STRING }, origin: { type: Type.STRING }, properties: { type: Type.STRING }, visualDetails: { type: Type.STRING }, history: { type: Type.STRING }, visualStyle: { type: Type.STRING } } }; } else if (mode === AppMode.STORY) { prompt = `Generate a compelling story synopsis fitting this setting: ${context}.`; schema = { type: Type.OBJECT, properties: { synopsis: { type: Type.STRING } } }; } if (schema) { const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: prompt, config: { responseMimeType: "application/json", responseSchema: schema } }); if (response.text) { const data = JSON.parse(response.text); if (mode === AppMode.CHARACTER) setCharData({ ...charData, ...data }); else if (mode === AppMode.ENVIRONMENT) setEnvData({ ...envData, ...data }); else if (mode === AppMode.PROP) setPropData({ ...propData, ...data }); else if (mode === AppMode.STORY) setStoryData({ ...storyData, ...data }); return; } } } catch (e: any) { const isKeyError = e.message?.includes("leaked") || e.status === 403 || e.message?.includes("API key"); if (isKeyError) { console.warn("AI Chaos: API Key invalid or leaked. Triggering re-selection."); if (window.aistudio) { await window.aistudio.openSelectKey(); } } else { console.error("AI Chaos failed, falling back to random pool", e); } } finally { setIsRandomizing(false); } } if (mode === AppMode.CHARACTER) { setCharData({ ...charData, name: pick(r.names), species: pick(r.species), role: pick(r.roles), archetype: pick(r.archetypes), personality: pick(r.personalityTraits), motivation: pick(r.motivations), flaws: pick(r.flaws), backstory: pick(r.backstories), visualStyle: pick(r.visualStyles), hairColor: pick(r.hairColors), eyeColor: pick(r.eyeColors), height: pick(r.heights), build: pick(r.builds), distinguishingFeatures: pick(r.features), skinTone: pick(r.skinTones), clothingStyle: pick(r.clothing), postureGait: pick(r.gaits), scent: pick(r.scents), alignment: pick(r.alignments), phobias: pick(r.phobias), hobbies: pick(r.hobbies), intelligence: pick(r.intelligences), placeOfBirth: pick(r.places), socialClass: pick(r.socialClasses), beliefs: pick(r.beliefs), languages: pick(r.languages), signatureWeapon: pick(r.weapons), specialAbilities: pick(r.abilities), combatStyle: pick(r.combatStyles), reputation: pick(r.reputations), allies: pick(r.allies), enemies: pick(r.enemies), petCompanion: pick(r.pets), voiceProfile: pick(r.voices), voiceDescription: pick(r.voiceDescriptions) }); } else if (mode === AppMode.ENVIRONMENT) { setEnvData({ ...envData, name: `The ${pick(["Ancient", "Lost", "Silent", "Forbidden", "Neon", "Crystal"])} ${pick(r.biomes).split(' ').pop()}`, biome: pick(r.biomes), timeOfDay: pick(r.times), weather: pick(r.weathers), atmosphere: pick(r.atmospheres), architecture: pick(r.architectures), landmarks: pick(r.landmarks || ["Monolith", "Ruins", "Spire", "Gateway"]), lighting: pick(r.lightingThemes), visualStyle: pick(r.visualStyles), history: pick(r.backstories), colors: pick(r.hairColors), scale: pick(["Massive", "Claustrophobic", "Sprawling", "Vertical"]), }) } else if (mode === AppMode.PROP) { setPropData({ ...propData, name: `${pick(r.conditions).split(' ')[0]} ${pick(r.materials)} ${pick(r.propCategories).split(' ').pop()}`, category: pick(r.propCategories), material: pick(r.materials), condition: pick(r.conditions), visualStyle: pick(r.visualStyles), properties: pick(r.properties), origin: pick(r.places), size: pick(["Handheld", "Tiny", "Large", "Heavy"]), weight: pick(["Feather-light", "Heavy", "Unwieldy"]), visualDetails: pick(r.features), history: pick(r.backstories) }) } else if (mode === AppMode.STORY) { setStoryData({ ...storyData, synopsis: pick(r.storySynopses) }); } };
 
-  const randomize = async () => {
-    const r = RANDOM_POOL;
-    const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+  const getActivePrompts = () => { switch (mode) { case AppMode.CHARACTER: return [{ title: 'Narrative Profile', icon: 'fa-book-open', content: PROMPT_TEMPLATES.characterNarrative(charData) }, { title: 'Visual Description', icon: 'fa-camera', content: PROMPT_TEMPLATES.characterVisual(charData) }, { title: 'Multi-View Concept', icon: 'fa-layer-group', content: PROMPT_TEMPLATES.characterMultiView(charData) }]; case AppMode.ENVIRONMENT: return [{ title: 'Cinematic', icon: 'fa-clapperboard', content: PROMPT_TEMPLATES.envCinematic(envData) }, { title: 'World Lore', icon: 'fa-globe', content: PROMPT_TEMPLATES.envWorldbuilding(envData) }]; case AppMode.PROP: return [{ title: 'Technical Spec', icon: 'fa-microscope', content: PROMPT_TEMPLATES.propDescription(propData) }, { title: 'Mythic Relic', icon: 'fa-crown', content: PROMPT_TEMPLATES.propRelic(propData) }]; default: return []; } };
+  const activePrompts = getActivePrompts();
+  const activePromptData = activePrompts[activeFooterTab];
+  const getOrphanedElements = () => { return savedElements.filter(el => { if (el.type === AppMode.CHARACTER) return !characterLibrary.some(c => c.name === el.name); if (el.type === AppMode.ENVIRONMENT) return !environmentLibrary.some(e => e.name === el.name); if (el.type === AppMode.PROP) return !propLibrary.some(p => p.name === el.name); return true; }); };
+  const orphanedElements = getOrphanedElements();
 
-    // 1. Handle Globals Randomization (always random pool since it sets the context)
-    if (mode === AppMode.GLOBALS) {
-      setGlobalData({
-        ...globalData,
-        style: pick(r.visualStyles),
-        timePeriod: pick(r.timePeriods),
-        genre: pick(r.genres),
-        lightingTheme: pick(r.lightingThemes)
-      });
-      return;
+  const handleExportZip = async () => {
+    const zip = new JSZip();
+    
+    // 1. Data File
+    const fullSession = {
+        meta: { 
+            name: currentSessionName, 
+            exportedAt: new Date().toISOString(),
+            globals: globalData 
+        },
+        story: storyData,
+        characters: characterLibrary,
+        environments: environmentLibrary,
+        props: propLibrary,
+        savedAssets: savedElements
+    };
+    zip.file("chronicle_data.json", JSON.stringify(fullSession, null, 2));
+    
+    if (storyData.fullStory) {
+        zip.file("story_text.txt", storyData.fullStory);
     }
 
-    // 2. Context-Aware AI Generation
-    const context = `Genre: ${globalData.genre}, Time Period: ${globalData.timePeriod}, Style: ${globalData.style}`;
-    const useAI = (globalData.genre || globalData.timePeriod || globalData.style) && (hasKey || getApiKey());
+    // 2. Images
+    const imgFolder = zip.folder("images");
+    const uniqueImages = new Set<string>();
+    
+    // Helper to add images to zip
+    const addToZip = (name: string, dataUrl: string) => {
+        if (!dataUrl || uniqueImages.has(dataUrl)) return;
+        const matches = dataUrl.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/);
+        if (matches) {
+            const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+            const safeName = name.replace(/[^a-z0-9]/gi, '_').substring(0, 50) + `_${Date.now()}`;
+            imgFolder?.file(`${safeName}.${ext}`, matches[2], {base64: true});
+            uniqueImages.add(dataUrl);
+        }
+    };
 
-    if (useAI) {
-        setIsRandomizing(true);
-        try {
-             const apiKey = getApiKey();
-             const ai = new GoogleGenAI({ apiKey });
-             let schema = null;
-             let prompt = "";
+    // Iterate libraries for main images
+    characterLibrary.forEach(c => c.customImage && addToZip(`${c.name}_main`, c.customImage));
+    environmentLibrary.forEach(e => e.customImage && addToZip(`${e.name}_main`, e.customImage));
+    propLibrary.forEach(p => p.customImage && addToZip(`${p.name}_main`, p.customImage));
+    // Iterate saved elements gallery
+    savedElements.forEach(s => s.imageUrl && addToZip(`${s.type}_${s.name}`, s.imageUrl));
 
-             if (mode === AppMode.CHARACTER) {
-                 prompt = `Generate a detailed RPG character profile fitting this setting: ${context}. Fill all fields. For voiceProfile, pick one of: Puck, Charon, Kore, Fenrir, Zephyr.`;
-                 schema = {
-                    type: Type.OBJECT,
-                    properties: {
-                        name: { type: Type.STRING },
-                        species: { type: Type.STRING },
-                        role: { type: Type.STRING },
-                        archetype: { type: Type.STRING },
-                        personality: { type: Type.STRING },
-                        motivation: { type: Type.STRING },
-                        flaws: { type: Type.STRING },
-                        backstory: { type: Type.STRING },
-                        visualStyle: { type: Type.STRING },
-                        hairColor: { type: Type.STRING },
-                        eyeColor: { type: Type.STRING },
-                        height: { type: Type.STRING },
-                        build: { type: Type.STRING },
-                        distinguishingFeatures: { type: Type.STRING },
-                        skinTone: { type: Type.STRING },
-                        clothingStyle: { type: Type.STRING },
-                        postureGait: { type: Type.STRING },
-                        scent: { type: Type.STRING },
-                        alignment: { type: Type.STRING },
-                        phobias: { type: Type.STRING },
-                        hobbies: { type: Type.STRING },
-                        intelligence: { type: Type.STRING },
-                        placeOfBirth: { type: Type.STRING },
-                        socialClass: { type: Type.STRING },
-                        beliefs: { type: Type.STRING },
-                        languages: { type: Type.STRING },
-                        signatureWeapon: { type: Type.STRING },
-                        specialAbilities: { type: Type.STRING },
-                        combatStyle: { type: Type.STRING },
-                        reputation: { type: Type.STRING },
-                        allies: { type: Type.STRING },
-                        enemies: { type: Type.STRING },
-                        petCompanion: { type: Type.STRING },
-                        voiceProfile: { type: Type.STRING, enum: ["Puck", "Charon", "Kore", "Fenrir", "Zephyr"] },
-                        voiceDescription: { type: Type.STRING }
-                    }
-                 };
-             } else if (mode === AppMode.ENVIRONMENT) {
-                 prompt = `Generate a unique location/environment fitting this setting: ${context}.`;
-                 schema = {
-                    type: Type.OBJECT,
-                    properties: {
-                        name: { type: Type.STRING },
-                        biome: { type: Type.STRING },
-                        timeOfDay: { type: Type.STRING },
-                        weather: { type: Type.STRING },
-                        atmosphere: { type: Type.STRING },
-                        architecture: { type: Type.STRING },
-                        landmarks: { type: Type.STRING },
-                        history: { type: Type.STRING },
-                        lighting: { type: Type.STRING },
-                        visualStyle: { type: Type.STRING },
-                        scale: { type: Type.STRING },
-                        colors: { type: Type.STRING }
-                    }
-                 };
-             } else if (mode === AppMode.PROP) {
-                 prompt = `Generate a unique item/prop fitting this setting: ${context}.`;
-                 schema = {
-                    type: Type.OBJECT,
-                    properties: {
-                        name: { type: Type.STRING },
-                        category: { type: Type.STRING },
-                        material: { type: Type.STRING },
-                        size: { type: Type.STRING },
-                        weight: { type: Type.STRING },
-                        condition: { type: Type.STRING },
-                        origin: { type: Type.STRING },
-                        properties: { type: Type.STRING },
-                        visualDetails: { type: Type.STRING },
-                        history: { type: Type.STRING },
-                        visualStyle: { type: Type.STRING }
-                    }
-                 };
-             } else if (mode === AppMode.STORY) {
-                 prompt = `Generate a compelling story synopsis fitting this setting: ${context}.`;
-                 schema = {
-                    type: Type.OBJECT,
-                    properties: {
-                        synopsis: { type: Type.STRING }
-                    }
-                 };
-             }
+    // 3. Generate
+    const content = await zip.generateAsync({type:"blob"});
+    const url = URL.createObjectURL(content);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${currentSessionName.replace(/[^a-z0-9]/gi, '_')}_Archive.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
-             if (schema) {
-                 const response = await ai.models.generateContent({
-                     model: 'gemini-3-flash-preview',
-                     contents: prompt,
-                     config: {
-                         responseMimeType: "application/json",
-                         responseSchema: schema
-                     }
-                 });
-                 if (response.text) {
-                     const data = JSON.parse(response.text);
-                     if (mode === AppMode.CHARACTER) setCharData({ ...charData, ...data });
-                     else if (mode === AppMode.ENVIRONMENT) setEnvData({ ...envData, ...data });
-                     else if (mode === AppMode.PROP) setPropData({ ...propData, ...data });
-                     else if (mode === AppMode.STORY) setStoryData({ ...storyData, ...data });
-                     return;
-                 }
-             }
+  const handleExportPdf = async () => {
+    const doc = new jsPDF();
+    let y = 20;
+    const pageWidth = 210;
+    const margin = 15;
+    const contentWidth = pageWidth - (margin * 2);
 
-        } catch (e: any) {
-            // Enhanced error handling for leaked/invalid keys
-            const isKeyError = e.message?.includes("leaked") || e.status === 403 || e.message?.includes("API key");
+    const addText = (text: string, size = 10, bold = false, color = '#000000') => {
+        doc.setFontSize(size);
+        doc.setTextColor(color);
+        doc.setFont("helvetica", bold ? "bold" : "normal");
+        
+        const lines = doc.splitTextToSize(text, contentWidth);
+        const height = lines.length * (size * 0.4);
+        
+        if (y + height > 280) {
+            doc.addPage();
+            y = 20;
+        }
+        
+        doc.text(lines, margin, y);
+        y += height + 5;
+    };
+
+    const addImage = (base64: string) => {
+        if (!base64) return;
+        const imgProps = doc.getImageProperties(base64);
+        const ratio = imgProps.width / imgProps.height;
+        const height = contentWidth / ratio;
+        
+        if (y + height > 280) {
+            doc.addPage();
+            y = 20;
+        }
+        
+        doc.addImage(base64, 'PNG', margin, y, contentWidth, height);
+        y += height + 10;
+    };
+
+    // --- Title Page ---
+    doc.setFontSize(30);
+    doc.text(currentSessionName, margin, y + 10);
+    y += 30;
+    
+    addText(`Genre: ${globalData.genre} | Time: ${globalData.timePeriod}`, 12, false, '#555555');
+    addText(`Style: ${globalData.style}`, 12, false, '#555555');
+    y += 10;
+    doc.setDrawColor(200);
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 15;
+
+    // --- Story ---
+    if (storyData.fullStory) {
+        addText("The Chronicle", 18, true, '#aa0000');
+        addText(storyData.fullStory, 11, false);
+        y += 10;
+    }
+
+    // --- Characters ---
+    if (characterLibrary.length > 0) {
+        doc.addPage();
+        y = 20;
+        addText("Dramatis Personae", 22, true, '#0000aa');
+        y += 10;
+        
+        for (const char of characterLibrary) {
+            if (y > 220) { doc.addPage(); y = 20; }
             
-            if (isKeyError) {
-                console.warn("AI Chaos: API Key invalid or leaked. Triggering re-selection.");
-                if (window.aistudio) {
-                    await window.aistudio.openSelectKey();
-                }
-            } else {
-                 console.error("AI Chaos failed, falling back to random pool", e);
+            // Header
+            doc.setFillColor(240, 240, 245);
+            doc.rect(margin, y - 5, contentWidth, 12, 'F');
+            doc.setTextColor(0);
+            doc.setFontSize(14);
+            doc.setFont("helvetica", "bold");
+            doc.text(`${char.name} (${char.species} ${char.role})`, margin + 2, y + 3);
+            y += 15;
+
+            // Image
+            if (char.customImage) {
+                addImage(char.customImage);
             }
-            // Fallthrough to random pool happens naturally after catch
-        } finally {
-            setIsRandomizing(false);
+
+            // Details
+            addText(`Archetype: ${char.archetype}`, 10, true);
+            addText(char.personality, 10, false);
+            addText(char.backstory, 10, false);
+            y += 10;
         }
     }
 
-    // 3. Fallback to Random Pool
-    if (mode === AppMode.CHARACTER) {
-      setCharData({
-        ...charData,
-        name: pick(r.names),
-        species: pick(r.species),
-        role: pick(r.roles),
-        archetype: pick(r.archetypes),
-        personality: pick(r.personalityTraits),
-        motivation: pick(r.motivations),
-        flaws: pick(r.flaws),
-        backstory: pick(r.backstories),
-        visualStyle: pick(r.visualStyles),
-        hairColor: pick(r.hairColors),
-        eyeColor: pick(r.eyeColors),
-        height: pick(r.heights),
-        build: pick(r.builds),
-        distinguishingFeatures: pick(r.features),
-        skinTone: pick(r.skinTones),
-        clothingStyle: pick(r.clothing),
-        postureGait: pick(r.gaits),
-        scent: pick(r.scents),
-        alignment: pick(r.alignments),
-        phobias: pick(r.phobias),
-        hobbies: pick(r.hobbies),
-        intelligence: pick(r.intelligences),
-        placeOfBirth: pick(r.places),
-        socialClass: pick(r.socialClasses),
-        beliefs: pick(r.beliefs),
-        languages: pick(r.languages),
-        signatureWeapon: pick(r.weapons),
-        specialAbilities: pick(r.abilities),
-        combatStyle: pick(r.combatStyles),
-        reputation: pick(r.reputations),
-        allies: pick(r.allies),
-        enemies: pick(r.enemies),
-        petCompanion: pick(r.pets),
-        voiceProfile: pick(r.voices),
-        voiceDescription: pick(r.voiceDescriptions)
-      });
-    } else if (mode === AppMode.ENVIRONMENT) {
-        setEnvData({
-            ...envData,
-            name: `The ${pick(["Ancient", "Lost", "Silent", "Forbidden", "Neon", "Crystal"])} ${pick(r.biomes).split(' ').pop()}`,
-            biome: pick(r.biomes),
-            timeOfDay: pick(r.times),
-            weather: pick(r.weathers),
-            atmosphere: pick(r.atmospheres),
-            architecture: pick(r.architectures),
-            landmarks: pick(r.landmarks || ["Monolith", "Ruins", "Spire", "Gateway"]),
-            lighting: pick(r.lightingThemes),
-            visualStyle: pick(r.visualStyles),
-            history: pick(r.backstories), // Reusing general lore
-            colors: pick(r.hairColors), // Abstract color re-use
-            scale: pick(["Massive", "Claustrophobic", "Sprawling", "Vertical"]),
-        })
-    } else if (mode === AppMode.PROP) {
-        setPropData({
-            ...propData,
-            name: `${pick(r.conditions).split(' ')[0]} ${pick(r.materials)} ${pick(r.propCategories).split(' ').pop()}`,
-            category: pick(r.propCategories),
-            material: pick(r.materials),
-            condition: pick(r.conditions),
-            visualStyle: pick(r.visualStyles),
-            properties: pick(r.properties),
-            origin: pick(r.places),
-            size: pick(["Handheld", "Tiny", "Large", "Heavy"]),
-            weight: pick(["Feather-light", "Heavy", "Unwieldy"]),
-            visualDetails: pick(r.features),
-            history: pick(r.backstories)
-        })
-    } else if (mode === AppMode.STORY) {
-        setStoryData({
-            ...storyData,
-            synopsis: pick(r.storySynopses)
-        });
-    }
-  };
+    // --- Environments ---
+    if (environmentLibrary.length > 0) {
+        doc.addPage();
+        y = 20;
+        addText("Locations", 22, true, '#00aa00');
+        y += 10;
+        
+        for (const env of environmentLibrary) {
+            if (y > 220) { doc.addPage(); y = 20; }
+            
+            doc.setFillColor(240, 245, 240);
+            doc.rect(margin, y - 5, contentWidth, 12, 'F');
+            doc.setTextColor(0);
+            doc.setFontSize(14);
+            doc.setFont("helvetica", "bold");
+            doc.text(env.name, margin + 2, y + 3);
+            y += 15;
 
-  const getActivePrompts = () => {
-      switch (mode) {
-        case AppMode.CHARACTER: return [{ title: 'Narrative Profile', icon: 'fa-book-open', content: PROMPT_TEMPLATES.characterNarrative(charData) }, { title: 'Visual Description', icon: 'fa-camera', content: PROMPT_TEMPLATES.characterVisual(charData) }, { title: 'Multi-View Concept', icon: 'fa-layer-group', content: PROMPT_TEMPLATES.characterMultiView(charData) }];
-        case AppMode.ENVIRONMENT: return [{ title: 'Cinematic', icon: 'fa-clapperboard', content: PROMPT_TEMPLATES.envCinematic(envData) }, { title: 'World Lore', icon: 'fa-globe', content: PROMPT_TEMPLATES.envWorldbuilding(envData) }];
-        case AppMode.PROP: return [{ title: 'Technical Spec', icon: 'fa-microscope', content: PROMPT_TEMPLATES.propDescription(propData) }, { title: 'Mythic Relic', icon: 'fa-crown', content: PROMPT_TEMPLATES.propRelic(propData) }];
-        default: return [];
-      }
+            if (env.customImage) addImage(env.customImage);
+            addText(`${env.biome} - ${env.timeOfDay}`, 10, true);
+            addText(env.atmosphere, 10, false);
+            y += 10;
+        }
+    }
+
+    // --- Props ---
+    if (propLibrary.length > 0) {
+        doc.addPage();
+        y = 20;
+        addText("Artifacts", 22, true, '#aa00aa');
+        y += 10;
+        
+        for (const prop of propLibrary) {
+            if (y > 220) { doc.addPage(); y = 20; }
+            
+            doc.setFillColor(245, 240, 245);
+            doc.rect(margin, y - 5, contentWidth, 12, 'F');
+            doc.setTextColor(0);
+            doc.setFontSize(14);
+            doc.setFont("helvetica", "bold");
+            doc.text(prop.name, margin + 2, y + 3);
+            y += 15;
+
+            if (prop.customImage) addImage(prop.customImage);
+            addText(`${prop.category} (${prop.material})`, 10, true);
+            addText(prop.properties, 10, false);
+            y += 10;
+        }
+    }
+
+    doc.save(`${currentSessionName.replace(/[^a-z0-9]/gi, '_')}_Chronicle.pdf`);
   };
-  const activePrompts = getActivePrompts();
-  const activePromptData = activePrompts[activeFooterTab];
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-200 pb-64 relative overflow-hidden">
-      <header className="py-6 px-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
-        <div className="flex items-center gap-3"><div className="w-10 h-10 bg-yellow-500 rounded-lg flex items-center justify-center shadow-lg shadow-yellow-500/20"><i className="fa-solid fa-bolt text-slate-900 text-xl"></i></div><h1 className="text-2xl font-bold tracking-tight text-white hidden sm:block">MythosForge</h1></div>
+      <header className="py-6 px-4 md:px-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
+        <div className="flex items-center gap-3"><div className="w-10 h-10 bg-yellow-500 rounded-lg flex items-center justify-center shadow-lg shadow-yellow-500/20"><i className="fa-solid fa-bolt text-slate-900 text-xl"></i></div><h1 className="text-xl md:text-2xl font-bold tracking-tight text-white hidden sm:block">MythosForge</h1></div>
         <div className="flex items-center gap-4">
           <div className="hidden md:flex items-center gap-3 bg-slate-800 px-4 py-1.5 rounded-full border border-slate-700"><span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Workspace:</span><span className="text-xs font-bold text-slate-200">{currentSessionName}</span><button onClick={handleSaveSession} title="Save to Cloud" className="text-indigo-400 hover:text-white transition-colors"><i className={`fa-solid ${user ? 'fa-cloud-arrow-up' : 'fa-floppy-disk'}`}></i></button></div>
           <div className="h-8 w-px bg-slate-800"></div>
           {user ? (
-              <div ref={profileRef} className="relative">
-                  <button onClick={() => setIsProfileOpen(!isProfileOpen)} className="flex items-center gap-3 group focus:outline-none">
-                      <div className="text-right hidden sm:block"><div className="text-xs font-bold text-white leading-none">{user.name}</div><div className="text-[10px] text-indigo-400 uppercase tracking-widest font-black leading-none mt-1">Cloud Pro</div></div>
-                      <img src={user.picture} className={`w-10 h-10 rounded-xl border border-slate-700 ring-2 transition-all ${isProfileOpen ? 'ring-indigo-500' : 'ring-transparent'}`} alt="Avatar" />
-                  </button>
-                  {isProfileOpen && (
-                      <div className="absolute top-full right-0 mt-3 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-[100] animate-in slide-in-from-top-2 duration-200 p-2 space-y-1">
-                          <button onClick={() => { setIsSettingsOpen(true); setIsProfileOpen(false); }} className="w-full text-left px-4 py-3 text-xs font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-all flex items-center gap-3"><i className="fa-solid fa-key text-yellow-500"></i> API Keys</button>
-                          <button onClick={() => { handleLogout(); setIsProfileOpen(false); }} className="w-full text-left px-4 py-3 text-xs font-bold text-red-400 hover:bg-red-500/10 rounded-lg transition-all flex items-center gap-3"><i className="fa-solid fa-right-from-bracket"></i> Sign Out</button>
-                      </div>
-                  )}
-              </div>
+              <button onClick={() => setIsProfileModalOpen(true)} className="flex items-center gap-3 group focus:outline-none">
+                  <div className="text-right hidden sm:block"><div className="text-xs font-bold text-white leading-none">{user.name}</div><div className="text-[10px] text-indigo-400 uppercase tracking-widest font-black leading-none mt-1">Cloud Pro</div></div>
+                  <img src={user.picture} className="w-10 h-10 rounded-xl border border-slate-700 ring-2 ring-transparent group-hover:ring-indigo-500 transition-all object-cover" alt="Avatar" />
+              </button>
           ) : (<button onClick={() => setIsAuthModalOpen(true)} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-bold text-xs uppercase tracking-widest transition-all shadow-lg shadow-indigo-600/20">Sign In</button>)}
         </div>
       </header>
 
-      <div className="bg-slate-900/30 border-b border-slate-800 px-8 py-4 sticky top-24 z-40 backdrop-blur-md">
+      <div className="bg-slate-900/30 border-b border-slate-800 px-4 md:px-8 py-4 sticky top-24 z-40 backdrop-blur-md">
         <div className="max-w-6xl mx-auto flex gap-4 overflow-x-auto pb-1">
           {[AppMode.GLOBALS, AppMode.CHARACTER, AppMode.ENVIRONMENT, AppMode.PROP, AppMode.STORY, AppMode.CHRONICLE].map((m) => (
             <button key={m} onClick={() => { setMode(m); setActiveFooterTab(0); }} className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap ${mode === m ? 'bg-yellow-500 text-slate-950 shadow-lg shadow-yellow-500/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}><i className={`fa-solid ${m === AppMode.GLOBALS ? 'fa-sliders' : m === AppMode.CHARACTER ? 'fa-user' : m === AppMode.ENVIRONMENT ? 'fa-mountain' : m === AppMode.STORY ? 'fa-book-skull' : m === AppMode.CHRONICLE ? 'fa-scroll' : 'fa-cube'}`}></i>{m === AppMode.GLOBALS ? m : m === AppMode.STORY ? 'Story' : m === AppMode.CHRONICLE ? 'Chronicle' : `${m}s`}</button>
@@ -726,17 +859,34 @@ export default function App() {
                  </section>
                  <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
                     <SectionTitle title="Render Config" icon="fa-gear" />
-                    <div className="grid grid-cols-2 gap-3">
-                       <div className="flex flex-col gap-1.5"><label className="text-xs font-medium text-slate-400">Aspect Ratio</label><select value={globalData.aspectRatio} onChange={(e) => setGlobalData({...globalData, aspectRatio: e.target.value as any})} className="bg-slate-800 border border-slate-700 rounded-md px-2 py-2 text-sm text-slate-200 outline-none"><option value="1:1">1:1</option><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="4:3">4:3</option></select></div>
-                       <div className="flex flex-col gap-1.5"><label className="text-xs font-medium text-slate-400">Quality</label><select value={globalData.imageQuality} onChange={(e) => setGlobalData({...globalData, imageQuality: e.target.value as any})} className="bg-slate-800 border border-slate-700 rounded-md px-2 py-2 text-sm text-slate-200 outline-none"><option value="1K">1K</option><option value="2K">2K</option></select></div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                       <div className="flex flex-col gap-1.5"><label className="text-xs font-medium text-slate-400">Aspect Ratio</label><select value={globalData.aspectRatio} onChange={(e) => setGlobalData({...globalData, aspectRatio: e.target.value as any})} className="bg-slate-800 border border-slate-700 rounded-md px-2 py-2 text-base md:text-sm text-slate-200 outline-none"><option value="1:1">1:1</option><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="4:3">4:3</option></select></div>
+                       <div className="flex flex-col gap-1.5"><label className="text-xs font-medium text-slate-400">Quality</label><select value={globalData.imageQuality} onChange={(e) => setGlobalData({...globalData, imageQuality: e.target.value as any})} className="bg-slate-800 border border-slate-700 rounded-md px-2 py-2 text-base md:text-sm text-slate-200 outline-none"><option value="1K">1K</option><option value="2K">2K</option></select></div>
+                    </div>
+                 </section>
+                 <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
+                    <SectionTitle title="Export Studio" icon="fa-file-export" />
+                    <div className="flex flex-col gap-3">
+                        <button onClick={handleExportZip} className="w-full py-3 bg-indigo-600/20 hover:bg-indigo-600 text-indigo-400 hover:text-white rounded-lg font-bold border border-indigo-500/50 transition-all flex items-center justify-center gap-3">
+                            <i className="fa-solid fa-file-zipper text-xl"></i>
+                            <div className="flex flex-col items-start">
+                                <span className="text-xs font-black uppercase">Compile Archive (.zip)</span>
+                                <span className="text-[10px] opacity-70">JSON Data + All Images</span>
+                            </div>
+                        </button>
+                        <button onClick={handleExportPdf} className="w-full py-3 bg-red-500/10 hover:bg-red-600 text-red-400 hover:text-white rounded-lg font-bold border border-red-500/50 transition-all flex items-center justify-center gap-3">
+                            <i className="fa-solid fa-file-pdf text-xl"></i>
+                            <div className="flex flex-col items-start">
+                                <span className="text-xs font-black uppercase">Print Chronicle (.pdf)</span>
+                                <span className="text-[10px] opacity-70">Formatted Story Document</span>
+                            </div>
+                        </button>
                     </div>
                  </section>
               </>
            )}
-
            {mode === AppMode.STORY && (
               <>
-                {/* Story Context Board */}
                 <div className="col-span-full mb-6">
                     <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4">
                          <SectionTitle title="Story Context Board" icon="fa-users-viewfinder" />
@@ -747,314 +897,69 @@ export default function App() {
                                  {savedElements.map(el => (
                                      <div key={el.id} className="min-w-[160px] w-[160px] bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg group">
                                          <div className="h-24 w-full bg-slate-900 overflow-hidden relative">
-                                            <img src={el.imageUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" alt={el.name} />
+                                            <img src={el.imageUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity cursor-zoom-in" alt={el.name} onMouseEnter={() => setHoveredImage(el.imageUrl)} onMouseLeave={() => setHoveredImage(null)} />
                                             <div className="absolute top-1 right-1 bg-slate-950/80 px-1.5 py-0.5 rounded text-[8px] font-black uppercase text-white">{el.type}</div>
                                          </div>
-                                         <div className="p-3">
-                                             <div className="font-bold text-xs text-white truncate">{el.name}</div>
-                                             <div className="text-[10px] text-slate-500 line-clamp-2 leading-tight mt-1 h-8">{el.description}</div>
-                                         </div>
+                                         <div className="p-3"><div className="font-bold text-xs text-white truncate">{el.name}</div><div className="text-[10px] text-slate-500 line-clamp-2 leading-tight mt-1 h-8">{el.description}</div></div>
                                      </div>
                                  ))}
                              </div>
                          )}
                     </div>
                 </div>
-
                  <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4 col-span-1 lg:col-span-2">
                     <SectionTitle title="Story Studio" icon="fa-pen-nib" />
                     <InputField label="Synopsis" value={storyData.synopsis} onChange={(v) => setStoryData({...storyData, synopsis: v})} isTextArea />
                     <button onClick={() => sendToAI(storyData.synopsis, true)} className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-white transition-all shadow-lg shadow-indigo-600/20">Generate Narrative</button>
                     <InputField label="Full Story" value={storyData.fullStory} onChange={(v) => setStoryData({...storyData, fullStory: v})} isTextArea rows={12} />
-                    
-                    <div className="flex justify-end">
-                       <button onClick={analyzeStory} disabled={!storyData.fullStory} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-bold transition-all border border-slate-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                          <i className="fa-solid fa-scissors"></i> Break into Scenes
-                       </button>
-                    </div>
-                    {storyData.storyScenes.length > 0 && (
-                       <div className="space-y-2 mt-2">
-                          <label className="text-xs font-bold text-slate-500 uppercase">Detected Scenes</label>
-                          <div className="grid gap-2">
-                             {storyData.storyScenes.map((scene, idx) => (
-                                <div key={idx} className={`flex items-start gap-3 p-3 rounded-lg border transition-all ${storyboardScene === scene ? 'bg-yellow-500/10 border-yellow-500' : 'bg-slate-800 border-slate-700 hover:border-slate-500'}`}>
-                                   <div className="flex-1 cursor-pointer" onClick={() => setStoryboardScene(scene)}>
-                                      <div className="font-bold mb-1 text-[10px] opacity-50 uppercase text-slate-400">Scene {idx + 1}</div>
-                                      <div className={`text-xs leading-relaxed ${storyboardScene === scene ? 'text-yellow-500' : 'text-slate-300'}`}>{scene}</div>
-                                   </div>
-                                   <button onClick={() => generateImage(scene, { isStoryboard: true })} className="shrink-0 px-3 py-1.5 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white border border-indigo-500/30 rounded text-[10px] font-black uppercase tracking-wide flex flex-col items-center gap-1 transition-all">
-                                      <i className="fa-solid fa-table-cells-large text-sm"></i>
-                                      Grid (2x2)
-                                   </button>
-                                </div>
-                             ))}
-                          </div>
-                       </div>
-                    )}
+                    <div className="flex justify-end"><button onClick={analyzeStory} disabled={!storyData.fullStory} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-bold transition-all border border-slate-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"><i className="fa-solid fa-scissors"></i> Break into Scenes</button></div>
+                    {storyData.storyScenes.length > 0 && (<div className="space-y-2 mt-2"><label className="text-xs font-bold text-slate-500 uppercase">Detected Scenes</label><div className="grid gap-2">{storyData.storyScenes.map((scene, idx) => (<div key={idx} className={`flex items-start gap-3 p-3 rounded-lg border transition-all ${storyboardScene === scene ? 'bg-yellow-500/10 border-yellow-500' : 'bg-slate-800 border-slate-700 hover:border-slate-500'}`}><div className="flex-1 cursor-pointer" onClick={() => setStoryboardScene(scene)}><div className="font-bold mb-1 text-[10px] opacity-50 uppercase text-slate-400">Scene {idx + 1}</div><div className={`text-xs leading-relaxed ${storyboardScene === scene ? 'text-yellow-500' : 'text-slate-300'}`}>{scene}</div></div><button onClick={() => generateImage(scene, { isStoryboard: true })} className="shrink-0 px-3 py-1.5 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white border border-indigo-500/30 rounded text-[10px] font-black uppercase tracking-wide flex flex-col items-center gap-1 transition-all"><i className="fa-solid fa-table-cells-large text-sm"></i>Grid (2x2)</button></div>))}</div></div>)}
                  </section>
-
                  <div className="space-y-4">
                     <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
                         <SectionTitle title="Storyboard Studio" icon="fa-clapperboard" />
                         <InputField label="Scene Description" value={storyboardScene} onChange={setStoryboardScene} isTextArea placeholder="Describe the scene layout..." />
-                        <div className="flex flex-col gap-3">
-                            <button onClick={() => generateImage(storyboardScene, { isStoryboard: true })} className="w-full py-3 bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 hover:bg-yellow-500/20 rounded-lg font-bold transition-all flex items-center justify-center gap-2">
-                                <i className="fa-solid fa-table-cells-large"></i>Generate 4-Panel Layout
-                            </button>
-                            <button onClick={() => generateImage(storyboardScene, { isStoryboard: false })} className="w-full py-3 bg-slate-800 text-slate-300 hover:bg-slate-700 rounded-lg font-bold transition-all flex items-center justify-center gap-2">
-                                <i className="fa-solid fa-image"></i>Generate Cinematic Still
-                            </button>
-                        </div>
+                        <div className="flex flex-col gap-3"><button onClick={() => generateImage(storyboardScene, { isStoryboard: true })} className="w-full py-3 bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 hover:bg-yellow-500/20 rounded-lg font-bold transition-all flex items-center justify-center gap-2"><i className="fa-solid fa-table-cells-large"></i>Generate 4-Panel Layout</button><button onClick={() => generateImage(storyboardScene, { isStoryboard: false })} className="w-full py-3 bg-slate-800 text-slate-300 hover:bg-slate-700 rounded-lg font-bold transition-all flex items-center justify-center gap-2"><i className="fa-solid fa-image"></i>Generate Cinematic Still</button></div>
                     </section>
                     <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4 h-fit">
                         <SectionTitle title="Registry" icon="fa-box-archive" />
-                        <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                           {savedElements.length === 0 ? <div className="text-center py-8 text-slate-600 italic text-xs">Vault is empty.</div> : savedElements.map((el) => (
-                             <div key={el.id} className="flex gap-3 bg-slate-950 p-2 rounded-lg border border-slate-800 hover:border-slate-600 transition-colors">
-                                 <div className="w-12 h-12 rounded bg-slate-800 overflow-hidden shrink-0"><img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover" /></div>
-                                 <div className="flex-1 min-w-0"><h4 className="font-bold text-xs truncate text-slate-300">{el.name}</h4><p className="text-[10px] text-slate-500 uppercase font-black">{el.type}</p></div>
-                                 <button onClick={() => setSavedElements(prev => prev.filter(x => x.id !== el.id))} className="text-slate-600 hover:text-red-500 px-2"><i className="fa-solid fa-trash"></i></button>
-                             </div>
-                           ))}
-                        </div>
+                        <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">{savedElements.length === 0 ? <div className="text-center py-8 text-slate-600 italic text-xs">Vault is empty.</div> : savedElements.map((el) => (<div key={el.id} className="flex gap-3 bg-slate-950 p-2 rounded-lg border border-slate-800 hover:border-slate-600 transition-colors"><div className="w-12 h-12 rounded bg-slate-800 overflow-hidden shrink-0"><img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover" /></div><div className="flex-1 min-w-0"><h4 className="font-bold text-xs truncate text-slate-300">{el.name}</h4><p className="text-[10px] text-slate-500 uppercase font-black">{el.type}</p></div><button onClick={() => setSavedElements(prev => prev.filter(x => x.id !== el.id))} className="text-slate-600 hover:text-red-500 px-2"><i className="fa-solid fa-trash"></i></button></div>))}</div>
                     </section>
                  </div>
               </>
            )}
-
            {mode === AppMode.CHRONICLE && (
               <div className="col-span-full space-y-12 max-w-4xl mx-auto pb-32">
-                 <div className="text-center space-y-4 py-10 border-b border-slate-800">
-                    <h1 className="text-5xl font-black text-white tracking-tight">{currentSessionName}</h1>
-                    <div className="flex flex-wrap justify-center gap-4 text-xs text-yellow-500 font-bold uppercase tracking-widest">
-                       <span>{globalData.genre}</span>
-                       <span className="text-slate-700">•</span>
-                       <span>{globalData.timePeriod}</span>
-                       <span className="text-slate-700">•</span>
-                       <span>{globalData.style}</span>
-                    </div>
-                 </div>
-
-                 {storyData.fullStory ? (
-                   <section className="prose prose-invert prose-lg max-w-none">
-                     <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-3"><i className="fa-solid fa-book-open text-yellow-500"></i> The Narrative</h2>
-                     <div className="bg-slate-900/40 p-8 rounded-2xl border border-slate-800 leading-relaxed text-slate-300 whitespace-pre-wrap font-serif text-lg shadow-xl shadow-black/20">{storyData.fullStory}</div>
-                   </section>
-                 ) : (
-                    <div className="text-center py-10 text-slate-600 italic border-2 border-dashed border-slate-800 rounded-xl">The story has not yet been written. Visit the Story Studio to generate the narrative.</div>
-                 )}
-
-                 {characterLibrary.length > 0 && (
-                    <section>
-                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-users text-indigo-500"></i> Dramatis Personae</h2>
-                       <div className="grid gap-6">
-                          {characterLibrary.map(char => (
-                             <div key={char.id} className="flex flex-col md:flex-row gap-6 bg-slate-900/40 p-6 rounded-2xl border border-slate-800/50 hover:border-slate-700 transition-colors">
-                                {char.customImage && (<div className="w-full md:w-48 h-64 shrink-0 rounded-xl overflow-hidden shadow-lg border border-slate-700 bg-slate-950"><img src={char.customImage} className="w-full h-full object-cover" alt={char.name} /></div>)}
-                                <div className="flex-1 space-y-3">
-                                    <div><h3 className="text-xl font-bold text-white">{char.name}</h3><p className="text-indigo-400 text-xs font-black uppercase tracking-widest">{char.species} • {char.role}</p></div>
-                                    <p className="text-slate-300 text-sm leading-relaxed italic">"{char.personality}"</p>
-                                    <div className="grid grid-cols-2 gap-4 text-xs text-slate-400 mt-4 bg-slate-950/30 p-4 rounded-lg">
-                                        <div><strong className="text-slate-500 block uppercase text-[10px] mb-1">Archetype</strong> {char.archetype}</div>
-                                        <div><strong className="text-slate-500 block uppercase text-[10px] mb-1">Motivation</strong> {char.motivation}</div>
-                                        <div className="col-span-2"><strong className="text-slate-500 block uppercase text-[10px] mb-1">Backstory</strong> {char.backstory}</div>
-                                    </div>
-                                </div>
-                             </div>
-                          ))}
-                       </div>
-                    </section>
-                 )}
-
-                 {environmentLibrary.length > 0 && (
-                    <section>
-                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-map-location-dot text-emerald-500"></i> Key Locations</h2>
-                       <div className="grid gap-6 md:grid-cols-2">
-                          {environmentLibrary.map(env => (
-                             <div key={env.id} className="group bg-slate-900/40 rounded-2xl border border-slate-800/50 overflow-hidden hover:border-slate-700 transition-colors">
-                                {env.customImage && (<div className="h-48 w-full bg-slate-950 overflow-hidden"><img src={env.customImage} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt={env.name} /></div>)}
-                                <div className="p-6 space-y-3">
-                                    <div><h3 className="text-lg font-bold text-white">{env.name}</h3><p className="text-emerald-500 text-xs font-black uppercase tracking-widest">{env.biome} • {env.timeOfDay}</p></div>
-                                    <p className="text-slate-400 text-xs leading-relaxed">{env.atmosphere} atmosphere. {env.architecture} style.</p>
-                                    {env.history && <p className="text-slate-500 text-xs italic mt-2 border-t border-slate-800/50 pt-2">{env.history}</p>}
-                                </div>
-                             </div>
-                          ))}
-                       </div>
-                    </section>
-                 )}
-
-                 {propLibrary.length > 0 && (
-                    <section>
-                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-gem text-pink-500"></i> Artifacts & Items</h2>
-                       <div className="grid gap-4 md:grid-cols-3">
-                          {propLibrary.map(prop => (
-                             <div key={prop.id} className="bg-slate-900/40 p-4 rounded-xl border border-slate-800/50 hover:border-slate-700 transition-colors flex flex-col gap-3">
-                                {prop.customImage && (<div className="aspect-square w-full rounded-lg overflow-hidden bg-slate-950 border border-slate-800"><img src={prop.customImage} className="w-full h-full object-cover" alt={prop.name} /></div>)}
-                                <div><h3 className="text-sm font-bold text-white">{prop.name}</h3><p className="text-pink-500 text-[10px] font-black uppercase tracking-widest">{prop.category}</p></div>
-                                <p className="text-slate-400 text-xs line-clamp-3">{prop.properties}</p>
-                             </div>
-                          ))}
-                       </div>
-                    </section>
-                 )}
-
-                 {savedElements.length > 0 && (
-                    <section>
-                       <h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-images text-blue-500"></i> Visual Archive</h2>
-                       <div className="columns-2 md:columns-3 gap-4 space-y-4">
-                          {savedElements.map(el => (
-                             <div key={el.id} className="break-inside-avoid bg-slate-900/40 rounded-xl border border-slate-800 overflow-hidden group">
-                                <img src={el.imageUrl} className="w-full h-auto" alt={el.name} />
-                                <div className="p-3 bg-slate-950/80">
-                                   <div className="text-xs font-bold text-white truncate">{el.name}</div>
-                                   <div className="text-[10px] text-slate-500 uppercase font-black">{el.type}</div>
-                                </div>
-                             </div>
-                          ))}
-                       </div>
-                    </section>
-                 )}
+                 <div className="text-center space-y-4 py-10 border-b border-slate-800"><h1 className="text-3xl md:text-5xl font-black text-white tracking-tight">{currentSessionName}</h1><div className="flex flex-wrap justify-center gap-4 text-xs text-yellow-500 font-bold uppercase tracking-widest"><span>{globalData.genre}</span><span className="text-slate-700">•</span><span>{globalData.timePeriod}</span><span className="text-slate-700">•</span><span>{globalData.style}</span></div></div>
+                 {storyData.fullStory ? (<section className="prose prose-invert prose-lg max-w-none"><h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-3"><i className="fa-solid fa-book-open text-yellow-500"></i> The Narrative</h2><div className="bg-slate-900/40 p-8 rounded-2xl border border-slate-800 leading-relaxed text-slate-300 whitespace-pre-wrap font-serif text-lg shadow-xl shadow-black/20">{storyData.fullStory}</div></section>) : (<div className="text-center py-10 text-slate-600 italic border-2 border-dashed border-slate-800 rounded-xl">The story has not yet been written. Visit the Story Studio to generate the narrative.</div>)}
+                 {characterLibrary.length > 0 && (<section><h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-users text-indigo-500"></i> Dramatis Personae</h2><div className="grid gap-6">{characterLibrary.map(char => { const charImages = savedElements.filter(el => el.type === AppMode.CHARACTER && el.name === char.name); return (<div key={char.id} className="flex flex-col gap-6 bg-slate-900/40 p-6 rounded-2xl border border-slate-800/50 hover:border-slate-700 transition-colors"><div className="flex flex-col md:flex-row gap-6">{char.customImage && (<div className="w-full md:w-48 h-64 shrink-0 rounded-xl overflow-hidden shadow-lg border border-slate-700 bg-slate-950"><img src={char.customImage} className="w-full h-full object-cover cursor-zoom-in" alt={char.name} onMouseEnter={() => setHoveredImage(char.customImage!)} onMouseLeave={() => setHoveredImage(null)} /></div>)}<div className="flex-1 space-y-3"><div><h3 className="text-xl font-bold text-white">{char.name}</h3><p className="text-indigo-400 text-xs font-black uppercase tracking-widest">{char.species} • {char.role}</p></div><p className="text-slate-300 text-sm leading-relaxed italic">"{char.personality}"</p><div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-slate-400 mt-4 bg-slate-950/30 p-4 rounded-lg"><div><strong className="text-slate-500 block uppercase text-[10px] mb-1">Archetype</strong> {char.archetype}</div><div><strong className="text-slate-500 block uppercase text-[10px] mb-1">Motivation</strong> {char.motivation}</div><div className="sm:col-span-2"><strong className="text-slate-500 block uppercase text-[10px] mb-1">Backstory</strong> {char.backstory}</div></div></div></div>{charImages.length > 0 && (<div className="mt-2 pt-4 border-t border-slate-800/50"><h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Visual Records</h4><div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">{charImages.map(img => (<div key={img.id} className="group relative aspect-square rounded-lg overflow-hidden bg-slate-950 border border-slate-800"><img src={img.imageUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity cursor-zoom-in" alt={img.name} onMouseEnter={() => setHoveredImage(img.imageUrl)} onMouseLeave={() => setHoveredImage(null)} /><div className="absolute inset-0 bg-slate-950/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-2 text-center pointer-events-none"><p className="text-[9px] text-slate-300 line-clamp-3 leading-tight">{img.description}</p></div></div>))}</div></div>)}</div>); })}</div></section>)}
+                 {environmentLibrary.length > 0 && (<section><h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-map-location-dot text-emerald-500"></i> Key Locations</h2><div className="grid gap-6">{environmentLibrary.map(env => { const envImages = savedElements.filter(el => el.type === AppMode.ENVIRONMENT && el.name === env.name); return (<div key={env.id} className="group bg-slate-900/40 rounded-2xl border border-slate-800/50 overflow-hidden hover:border-slate-700 transition-colors p-6 space-y-4"><div className="flex flex-col md:flex-row gap-6">{env.customImage && (<div className="w-full md:w-64 h-48 bg-slate-950 rounded-xl overflow-hidden border border-slate-800 shrink-0"><img src={env.customImage} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 cursor-zoom-in" alt={env.name} onMouseEnter={() => setHoveredImage(env.customImage!)} onMouseLeave={() => setHoveredImage(null)} /></div>)}<div className="flex-1 space-y-3"><div><h3 className="text-lg font-bold text-white">{env.name}</h3><p className="text-emerald-500 text-xs font-black uppercase tracking-widest">{env.biome} • {env.timeOfDay}</p></div><p className="text-slate-400 text-xs leading-relaxed">{env.atmosphere} atmosphere. {env.architecture} style.</p>{env.history && <p className="text-slate-500 text-xs italic mt-2 border-t border-slate-800/50 pt-2">{env.history}</p>}</div></div>{envImages.length > 0 && (<div className="mt-2 pt-4 border-t border-slate-800/50"><h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Location Views</h4><div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">{envImages.map(img => (<div key={img.id} className="group relative aspect-video rounded-lg overflow-hidden bg-slate-950 border border-slate-800"><img src={img.imageUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity cursor-zoom-in" alt={img.name} onMouseEnter={() => setHoveredImage(img.imageUrl)} onMouseLeave={() => setHoveredImage(null)} /><div className="absolute inset-0 bg-slate-950/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-2 text-center pointer-events-none"><p className="text-[9px] text-slate-300 line-clamp-3 leading-tight">{img.description}</p></div></div>))}</div></div>)}</div>); })}</div></section>)}
+                 {propLibrary.length > 0 && (<section><h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-gem text-pink-500"></i> Artifacts & Items</h2><div className="grid gap-6">{propLibrary.map(prop => { const propImages = savedElements.filter(el => el.type === AppMode.PROP && el.name === prop.name); return (<div key={prop.id} className="bg-slate-900/40 p-6 rounded-xl border border-slate-800/50 hover:border-slate-700 transition-colors space-y-4"><div className="flex flex-col md:flex-row gap-6 items-center md:items-start">{prop.customImage && (<div className="w-32 h-32 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 shrink-0"><img src={prop.customImage} className="w-full h-full object-cover cursor-zoom-in" alt={prop.name} onMouseEnter={() => setHoveredImage(prop.customImage!)} onMouseLeave={() => setHoveredImage(null)} /></div>)}<div className="flex-1 space-y-2 text-center md:text-left"><div><h3 className="text-sm font-bold text-white">{prop.name}</h3><p className="text-pink-500 text-[10px] font-black uppercase tracking-widest">{prop.category}</p></div><p className="text-slate-400 text-xs line-clamp-3">{prop.properties}</p></div></div>{propImages.length > 0 && (<div className="mt-2 pt-4 border-t border-slate-800/50"><h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Item Gallery</h4><div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-3">{propImages.map(img => (<div key={img.id} className="group relative aspect-square rounded-lg overflow-hidden bg-slate-950 border border-slate-800"><img src={img.imageUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity cursor-zoom-in" alt={img.name} onMouseEnter={() => setHoveredImage(img.imageUrl)} onMouseLeave={() => setHoveredImage(null)} /><div className="absolute inset-0 bg-slate-950/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-2 text-center pointer-events-none"><p className="text-[9px] text-slate-300 line-clamp-3 leading-tight">{img.description}</p></div></div>))}</div></div>)}</div>); })}</div></section>)}
+                 {orphanedElements.length > 0 && (<section><h2 className="text-2xl font-bold text-white mb-6 border-b border-slate-800 pb-2 flex items-center gap-3"><i className="fa-solid fa-images text-blue-500"></i> Unclassified Visual Archive</h2><div className="columns-2 md:columns-3 gap-4 space-y-4">{orphanedElements.map(el => (<div key={el.id} className="break-inside-avoid bg-slate-900/40 rounded-xl border border-slate-800 overflow-hidden group"><img src={el.imageUrl} className="w-full h-auto cursor-zoom-in" alt={el.name} onMouseEnter={() => setHoveredImage(el.imageUrl)} onMouseLeave={() => setHoveredImage(null)} /><div className="p-3 bg-slate-950/80"><div className="text-xs font-bold text-white truncate">{el.name}</div><div className="text-[10px] text-slate-500 uppercase font-black">{el.type}</div><div className="text-[10px] text-slate-400 mt-1 line-clamp-2">{el.description}</div></div></div>))}</div></section>)}
               </div>
            )}
-
            {mode === AppMode.CHARACTER && (
               <>
                 <div className="col-span-full"><AssetManager label="Character" library={characterLibrary} currentId={charData.id} onLoad={loadCharacter} onSave={saveCharacter} onNew={newCharacter} onDelete={deleteCharacter} /></div>
-                
-                {/* Identity */}
-                <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                  <VisualReference imageData={charData.customImage} onUpload={(img) => setCharData({...charData, customImage: img})} onClear={() => setCharData({...charData, customImage: undefined})} />
-                  <SectionTitle title="Identity" icon="fa-dna" />
-                  <InputField label="Name" value={charData.name} onChange={v => setCharData({...charData, name: v})} />
-                  <div className="grid grid-cols-2 gap-3">
-                     <InputField label="Species" value={charData.species} onChange={v => setCharData({...charData, species: v})} />
-                     {(showIntermediate || showComplex) && <InputField label="Age" value={charData.age} onChange={v => setCharData({...charData, age: v})} />}
-                  </div>
-                  <div className="grid grid-cols-2 gap-3"><InputField label="Role" value={charData.role} onChange={v => setCharData({...charData, role: v})} /><InputField label="Archetype" value={charData.archetype} onChange={v => setCharData({...charData, archetype: v})} /></div>
-                </section>
-
-                {/* Physicality */}
-                {(showIntermediate || showComplex) && (
-                   <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                      <SectionTitle title="Physicality" icon="fa-person" />
-                      <div className="grid grid-cols-2 gap-3"><InputField label="Height" value={charData.height} onChange={v => setCharData({...charData, height: v})} /><InputField label="Build" value={charData.build} onChange={v => setCharData({...charData, build: v})} /></div>
-                      <div className="grid grid-cols-3 gap-3"><InputField label="Skin" value={charData.skinTone} onChange={v => setCharData({...charData, skinTone: v})} /><InputField label="Hair" value={charData.hairColor} onChange={v => setCharData({...charData, hairColor: v})} /><InputField label="Eyes" value={charData.eyeColor} onChange={v => setCharData({...charData, eyeColor: v})} /></div>
-                      {showComplex && (
-                         <>
-                            <div className="grid grid-cols-2 gap-3"><InputField label="Features" value={charData.distinguishingFeatures} onChange={v => setCharData({...charData, distinguishingFeatures: v})} /><InputField label="Tattoos" value={charData.tattoosMarkings} onChange={v => setCharData({...charData, tattoosMarkings: v})} /></div>
-                            <div className="grid grid-cols-2 gap-3"><InputField label="Clothing" value={charData.clothingStyle} onChange={v => setCharData({...charData, clothingStyle: v})} /><InputField label="Posture" value={charData.postureGait} onChange={v => setCharData({...charData, postureGait: v})} /></div>
-                            <InputField label="Scent" value={charData.scent} onChange={v => setCharData({...charData, scent: v})} />
-                         </>
-                      )}
-                      <InputField label="Visual Style" value={charData.visualStyle} onChange={v => setCharData({...charData, visualStyle: v})} />
-                   </section>
-                )}
-                
-                {/* Equipment & Abilities (Complex Only) */}
-                {showComplex && (
-                    <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                       <SectionTitle title="Equipment & Abilities" icon="fa-shield-halved" />
-                       <div className="grid grid-cols-2 gap-3"><InputField label="Weapon" value={charData.signatureWeapon} onChange={v => setCharData({...charData, signatureWeapon: v})} /><InputField label="Combat Style" value={charData.combatStyle} onChange={v => setCharData({...charData, combatStyle: v})} /></div>
-                       <InputField label="Abilities" value={charData.specialAbilities} onChange={v => setCharData({...charData, specialAbilities: v})} />
-                       <InputField label="Companion" value={charData.petCompanion} onChange={v => setCharData({...charData, petCompanion: v})} />
-                    </section>
-                )}
-
-                {/* Psyche & Lore */}
-                <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                  <SectionTitle title="Psyche & Lore" icon="fa-brain" />
-                  <InputField label="Personality" value={charData.personality} onChange={v => setCharData({...charData, personality: v})} isTextArea />
-                  {(showIntermediate || showComplex) && (
-                      <div className="grid grid-cols-2 gap-3"><InputField label="Motivation" value={charData.motivation} onChange={v => setCharData({...charData, motivation: v})} /><InputField label="Flaws" value={charData.flaws} onChange={v => setCharData({...charData, flaws: v})} /></div>
-                  )}
-                  {showComplex && (
-                     <div className="grid grid-cols-2 gap-3">
-                        <InputField label="Alignment" value={charData.alignment} onChange={v => setCharData({...charData, alignment: v})} />
-                        <InputField label="Intelligence" value={charData.intelligence} onChange={v => setCharData({...charData, intelligence: v})} />
-                        <InputField label="Phobias" value={charData.phobias} onChange={v => setCharData({...charData, phobias: v})} />
-                        <InputField label="Hobbies" value={charData.hobbies} onChange={v => setCharData({...charData, hobbies: v})} />
-                        <InputField label="Beliefs" value={charData.beliefs} onChange={v => setCharData({...charData, beliefs: v})} />
-                     </div>
-                  )}
-                  
-                  {(showIntermediate || showComplex) && <InputField label="Backstory" value={charData.backstory} onChange={v => setCharData({...charData, backstory: v})} isTextArea />}
-                  
-                  {showComplex && (
-                     <>
-                        <div className="grid grid-cols-2 gap-3"><InputField label="Origin" value={charData.placeOfBirth} onChange={v => setCharData({...charData, placeOfBirth: v})} /><InputField label="Social Class" value={charData.socialClass} onChange={v => setCharData({...charData, socialClass: v})} /></div>
-                        <div className="grid grid-cols-2 gap-3"><InputField label="Languages" value={charData.languages} onChange={v => setCharData({...charData, languages: v})} /><InputField label="Reputation" value={charData.reputation} onChange={v => setCharData({...charData, reputation: v})} /></div>
-                        <div className="grid grid-cols-2 gap-3"><InputField label="Allies" value={charData.allies} onChange={v => setCharData({...charData, allies: v})} /><InputField label="Enemies" value={charData.enemies} onChange={v => setCharData({...charData, enemies: v})} /></div>
-                        <InputField label="Secrets" value={charData.secrets} onChange={v => setCharData({...charData, secrets: v})} />
-                     </>
-                  )}
-                </section>
-                
-                {/* Voice (Complex Only) */}
-                {showComplex && (
-                   <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                       <SectionTitle title="Voice Settings" icon="fa-microphone-lines" />
-                       <div className="grid grid-cols-2 gap-3">
-                          <div className="flex flex-col gap-1.5 w-full"><label className="text-xs font-medium text-slate-400">Provider</label><select value={charData.voiceProvider} onChange={e => setCharData({...charData, voiceProvider: e.target.value as any})} className="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-yellow-500/30"><option value="Gemini">Gemini</option><option value="ElevenLabs">ElevenLabs</option></select></div>
-                          {charData.voiceProvider === 'Gemini' ? (<div className="flex flex-col gap-1.5 w-full"><label className="text-xs font-medium text-slate-400">Profile</label><select value={charData.voiceProfile} onChange={e => setCharData({...charData, voiceProfile: e.target.value})} className="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-yellow-500/30"><option value="Puck">Puck</option><option value="Charon">Charon</option><option value="Kore">Kore</option><option value="Fenrir">Fenrir</option><option value="Zephyr">Zephyr</option></select></div>) : (<InputField label="Voice ID" value={charData.elevenLabsVoiceId || ''} onChange={v => setCharData({...charData, elevenLabsVoiceId: v})} />)}
-                       </div>
-                       <InputField label="Description" value={charData.voiceDescription} onChange={v => setCharData({...charData, voiceDescription: v})} />
-                   </section>
-                )}
+                <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><VisualReference imageData={charData.customImage} onUpload={(img) => setCharData({...charData, customImage: img})} onClear={() => setCharData({...charData, customImage: undefined})} /><SectionTitle title="Identity" icon="fa-dna" /><InputField label="Name" value={charData.name} onChange={v => setCharData({...charData, name: v})} /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Species" value={charData.species} onChange={v => setCharData({...charData, species: v})} />{(showIntermediate || showComplex) && <InputField label="Age" value={charData.age} onChange={v => setCharData({...charData, age: v})} />}</div><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Role" value={charData.role} onChange={v => setCharData({...charData, role: v})} /><InputField label="Archetype" value={charData.archetype} onChange={v => setCharData({...charData, archetype: v})} /></div></section>
+                {(showIntermediate || showComplex) && (<section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><SectionTitle title="Physicality" icon="fa-person" /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Height" value={charData.height} onChange={v => setCharData({...charData, height: v})} /><InputField label="Build" value={charData.build} onChange={v => setCharData({...charData, build: v})} /></div><div className="grid grid-cols-1 sm:grid-cols-3 gap-3"><InputField label="Skin" value={charData.skinTone} onChange={v => setCharData({...charData, skinTone: v})} /><InputField label="Hair" value={charData.hairColor} onChange={v => setCharData({...charData, hairColor: v})} /><InputField label="Eyes" value={charData.eyeColor} onChange={v => setCharData({...charData, eyeColor: v})} /></div>{showComplex && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Features" value={charData.distinguishingFeatures} onChange={v => setCharData({...charData, distinguishingFeatures: v})} /><InputField label="Tattoos" value={charData.tattoosMarkings} onChange={v => setCharData({...charData, tattoosMarkings: v})} /></div><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Clothing" value={charData.clothingStyle} onChange={v => setCharData({...charData, clothingStyle: v})} /><InputField label="Posture" value={charData.postureGait} onChange={v => setCharData({...charData, postureGait: v})} /></div><InputField label="Scent" value={charData.scent} onChange={v => setCharData({...charData, scent: v})} /></>)}<InputField label="Visual Style" value={charData.visualStyle} onChange={v => setCharData({...charData, visualStyle: v})} /></section>)}
+                {showComplex && (<section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><SectionTitle title="Equipment & Abilities" icon="fa-shield-halved" /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Weapon" value={charData.signatureWeapon} onChange={v => setCharData({...charData, signatureWeapon: v})} /><InputField label="Combat Style" value={charData.combatStyle} onChange={v => setCharData({...charData, combatStyle: v})} /></div><InputField label="Abilities" value={charData.specialAbilities} onChange={v => setCharData({...charData, specialAbilities: v})} /><InputField label="Companion" value={charData.petCompanion} onChange={v => setCharData({...charData, petCompanion: v})} /></section>)}
+                <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><SectionTitle title="Psyche & Lore" icon="fa-brain" /><InputField label="Personality" value={charData.personality} onChange={v => setCharData({...charData, personality: v})} isTextArea />{(showIntermediate || showComplex) && (<div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Motivation" value={charData.motivation} onChange={v => setCharData({...charData, motivation: v})} /><InputField label="Flaws" value={charData.flaws} onChange={v => setCharData({...charData, flaws: v})} /></div>)}{showComplex && (<div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Alignment" value={charData.alignment} onChange={v => setCharData({...charData, alignment: v})} /><InputField label="Intelligence" value={charData.intelligence} onChange={v => setCharData({...charData, intelligence: v})} /><InputField label="Phobias" value={charData.phobias} onChange={v => setCharData({...charData, phobias: v})} /><InputField label="Hobbies" value={charData.hobbies} onChange={v => setCharData({...charData, hobbies: v})} /><InputField label="Beliefs" value={charData.beliefs} onChange={v => setCharData({...charData, beliefs: v})} /></div>)}{(showIntermediate || showComplex) && <InputField label="Backstory" value={charData.backstory} onChange={v => setCharData({...charData, backstory: v})} isTextArea />}{showComplex && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Origin" value={charData.placeOfBirth} onChange={v => setCharData({...charData, placeOfBirth: v})} /><InputField label="Social Class" value={charData.socialClass} onChange={v => setCharData({...charData, socialClass: v})} /></div><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Languages" value={charData.languages} onChange={v => setCharData({...charData, languages: v})} /><InputField label="Reputation" value={charData.reputation} onChange={v => setCharData({...charData, reputation: v})} /></div><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Allies" value={charData.allies} onChange={v => setCharData({...charData, allies: v})} /><InputField label="Enemies" value={charData.enemies} onChange={v => setCharData({...charData, enemies: v})} /></div><InputField label="Secrets" value={charData.secrets} onChange={v => setCharData({...charData, secrets: v})} /></>)}</section>
+                {showComplex && (<section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><SectionTitle title="Voice Settings" icon="fa-microphone-lines" /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><div className="flex flex-col gap-1.5 w-full"><label className="text-xs font-medium text-slate-400">Provider</label><select value={charData.voiceProvider} onChange={e => setCharData({...charData, voiceProvider: e.target.value as any})} className="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-base md:text-sm text-slate-200 outline-none focus:ring-2 focus:ring-yellow-500/30"><option value="Gemini">Gemini</option><option value="ElevenLabs">ElevenLabs</option></select></div>{charData.voiceProvider === 'Gemini' ? (<div className="flex flex-col gap-1.5 w-full"><label className="text-xs font-medium text-slate-400">Profile</label><select value={charData.voiceProfile} onChange={e => setCharData({...charData, voiceProfile: e.target.value})} className="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-base md:text-sm text-slate-200 outline-none focus:ring-2 focus:ring-yellow-500/30"><option value="Puck">Puck</option><option value="Charon">Charon</option><option value="Kore">Kore</option><option value="Fenrir">Fenrir</option><option value="Zephyr">Zephyr</option></select></div>) : (<InputField label="Voice ID" value={charData.elevenLabsVoiceId || ''} onChange={v => setCharData({...charData, elevenLabsVoiceId: v})} />)}</div><InputField label="Description" value={charData.voiceDescription} onChange={v => setCharData({...charData, voiceDescription: v})} /></section>)}
               </>
            )}
-
            {mode === AppMode.ENVIRONMENT && (
               <>
                  <div className="col-span-full"><AssetManager label="Environment" library={environmentLibrary} currentId={envData.id} onLoad={loadEnvironment} onSave={saveEnvironment} onNew={newEnvironment} onDelete={deleteEnvironment} /></div>
-                 <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                    <VisualReference imageData={envData.customImage} onUpload={(img) => setEnvData({...envData, customImage: img})} onClear={() => setEnvData({...envData, customImage: undefined})} />
-                    <SectionTitle title="Locale" icon="fa-mountain-city" />
-                    <InputField label="Name" value={envData.name} onChange={v => setEnvData({...envData, name: v})} />
-                    <div className="grid grid-cols-2 gap-3"><InputField label="Biome" value={envData.biome} onChange={v => setEnvData({...envData, biome: v})} /><InputField label="Time" value={envData.timeOfDay} onChange={v => setEnvData({...envData, timeOfDay: v})} /></div>
-                    {(showIntermediate || showComplex) && <InputField label="Weather" value={envData.weather} onChange={v => setEnvData({...envData, weather: v})} />}
-                 </section>
-                 {(showIntermediate || showComplex) && (
-                    <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                       <SectionTitle title="Ambience" icon="fa-cloud-sun" />
-                       <InputField label="Atmosphere" value={envData.atmosphere} onChange={v => setEnvData({...envData, atmosphere: v})} />
-                       <div className="grid grid-cols-2 gap-3"><InputField label="Architecture" value={envData.architecture} onChange={v => setEnvData({...envData, architecture: v})} /><InputField label="Landmarks" value={envData.landmarks} onChange={v => setEnvData({...envData, landmarks: v})} /></div>
-                       <InputField label="Lighting" value={envData.lighting} onChange={v => setEnvData({...envData, lighting: v})} />
-                       {showComplex && (
-                          <>
-                             <div className="grid grid-cols-2 gap-3"><InputField label="Scale" value={envData.scale} onChange={v => setEnvData({...envData, scale: v})} /><InputField label="Colors" value={envData.colors} onChange={v => setEnvData({...envData, colors: v})} /></div>
-                             <InputField label="Visual Style" value={envData.visualStyle} onChange={v => setEnvData({...envData, visualStyle: v})} />
-                             <InputField label="History" value={envData.history} onChange={v => setEnvData({...envData, history: v})} isTextArea />
-                          </>
-                       )}
-                    </section>
-                 )}
+                 <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><VisualReference imageData={envData.customImage} onUpload={(img) => setEnvData({...envData, customImage: img})} onClear={() => setEnvData({...envData, customImage: undefined})} /><SectionTitle title="Locale" icon="fa-mountain-city" /><InputField label="Name" value={envData.name} onChange={v => setEnvData({...envData, name: v})} /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Biome" value={envData.biome} onChange={v => setEnvData({...envData, biome: v})} /><InputField label="Time" value={envData.timeOfDay} onChange={v => setEnvData({...envData, timeOfDay: v})} /></div>{(showIntermediate || showComplex) && <InputField label="Weather" value={envData.weather} onChange={v => setEnvData({...envData, weather: v})} />}</section>
+                 {(showIntermediate || showComplex) && (<section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><SectionTitle title="Ambience" icon="fa-cloud-sun" /><InputField label="Atmosphere" value={envData.atmosphere} onChange={v => setEnvData({...envData, atmosphere: v})} /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Architecture" value={envData.architecture} onChange={v => setEnvData({...envData, architecture: v})} /><InputField label="Landmarks" value={envData.landmarks} onChange={v => setEnvData({...envData, landmarks: v})} /></div><InputField label="Lighting" value={envData.lighting} onChange={v => setEnvData({...envData, lighting: v})} />{showComplex && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Scale" value={envData.scale} onChange={v => setEnvData({...envData, scale: v})} /><InputField label="Colors" value={envData.colors} onChange={v => setEnvData({...envData, colors: v})} /></div><InputField label="Visual Style" value={envData.visualStyle} onChange={v => setEnvData({...envData, visualStyle: v})} /><InputField label="History" value={envData.history} onChange={v => setEnvData({...envData, history: v})} isTextArea /></>)}</section>)}
               </>
            )}
-
            {mode === AppMode.PROP && (
               <>
                  <div className="col-span-full"><AssetManager label="Prop" library={propLibrary} currentId={propData.id} onLoad={loadProp} onSave={saveProp} onNew={newProp} onDelete={deleteProp} /></div>
-                 <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                    <VisualReference imageData={propData.customImage} onUpload={(img) => setPropData({...propData, customImage: img})} onClear={() => setPropData({...propData, customImage: undefined})} />
-                    <SectionTitle title="Item" icon="fa-box" />
-                    <InputField label="Name" value={propData.name} onChange={v => setPropData({...propData, name: v})} />
-                    <div className="grid grid-cols-2 gap-3"><InputField label="Category" value={propData.category} onChange={v => setPropData({...propData, category: v})} /><InputField label="Material" value={propData.material} onChange={v => setPropData({...propData, material: v})} /></div>
-                 </section>
-                 {(showIntermediate || showComplex) && (
-                    <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4">
-                       <SectionTitle title="Specs" icon="fa-ruler-combined" />
-                       <div className="grid grid-cols-3 gap-3"><InputField label="Size" value={propData.size} onChange={v => setPropData({...propData, size: v})} /><InputField label="Weight" value={propData.weight} onChange={v => setPropData({...propData, weight: v})} /><InputField label="Condition" value={propData.condition} onChange={v => setPropData({...propData, condition: v})} /></div>
-                       <InputField label="Properties" value={propData.properties} onChange={v => setPropData({...propData, properties: v})} isTextArea />
-                       {showComplex && (
-                          <>
-                             <div className="grid grid-cols-2 gap-3"><InputField label="Origin" value={propData.origin} onChange={v => setPropData({...propData, origin: v})} /><InputField label="Visual Style" value={propData.visualStyle} onChange={v => setPropData({...propData, visualStyle: v})} /></div>
-                             <InputField label="Visual Details" value={propData.visualDetails} onChange={v => setPropData({...propData, visualDetails: v})} isTextArea />
-                             <InputField label="History" value={propData.history} onChange={v => setPropData({...propData, history: v})} isTextArea />
-                          </>
-                       )}
-                    </section>
-                 )}
+                 <section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><VisualReference imageData={propData.customImage} onUpload={(img) => setPropData({...propData, customImage: img})} onClear={() => setPropData({...propData, customImage: undefined})} /><SectionTitle title="Item" icon="fa-box" /><InputField label="Name" value={propData.name} onChange={v => setPropData({...propData, name: v})} /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Category" value={propData.category} onChange={v => setPropData({...propData, category: v})} /><InputField label="Material" value={propData.material} onChange={v => setPropData({...propData, material: v})} /></div></section>
+                 {(showIntermediate || showComplex) && (<section className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800 space-y-4"><SectionTitle title="Specs" icon="fa-ruler-combined" /><div className="grid grid-cols-1 sm:grid-cols-3 gap-3"><InputField label="Size" value={propData.size} onChange={v => setPropData({...propData, size: v})} /><InputField label="Weight" value={propData.weight} onChange={v => setPropData({...propData, weight: v})} /><InputField label="Condition" value={propData.condition} onChange={v => setPropData({...propData, condition: v})} /></div><InputField label="Properties" value={propData.properties} onChange={v => setPropData({...propData, properties: v})} isTextArea />{showComplex && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><InputField label="Origin" value={propData.origin} onChange={v => setPropData({...propData, origin: v})} /><InputField label="Visual Style" value={propData.visualStyle} onChange={v => setPropData({...propData, visualStyle: v})} /></div><InputField label="Visual Details" value={propData.visualDetails} onChange={v => setPropData({...propData, visualDetails: v})} isTextArea /><InputField label="History" value={propData.history} onChange={v => setPropData({...propData, history: v})} isTextArea /></>)}</section>)}
               </>
            )}
         </div>
@@ -1062,10 +967,10 @@ export default function App() {
 
       <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} onLogin={handleLogin} />
       <SessionModal isOpen={isSessionMenuOpen} onClose={() => setIsSessionMenuOpen(false)} sessions={sessions} currentName={currentSessionName} onRename={setCurrentSessionName} onSave={handleSaveSession} onLoad={handleLoadSession} onDelete={handleDeleteSession} onNew={handleNewSession} />
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={globalData.customApiKey || ''} elevenLabsKey={globalData.elevenLabsApiKey || ''} onUpdate={handleUpdateKeys} />
+      {user && <ProfileModal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} user={user} onUpdateUser={handleUpdateUser} onLogout={handleLogout} />}
 
-      {/* Footer / Prompt View */}
-      {mode !== AppMode.GLOBALS && mode !== AppMode.STORY && mode !== AppMode.CHRONICLE && (
+      {/* Footer / Prompt View (Unchanged) */}
+      {isFooterVisible && (
         <div className="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-xl border-t border-yellow-500/20 shadow-2xl z-40 p-0 flex flex-col h-64">
            <div className="flex bg-slate-950/80 border-b border-slate-800">
             {activePrompts.map((p, idx) => (
@@ -1089,17 +994,27 @@ export default function App() {
       )}
 
       {/* FAB and Chat */}
-      <button onClick={() => setIsChatOpen(!isChatOpen)} className="fixed bottom-32 right-8 w-14 h-14 bg-yellow-500 hover:bg-yellow-400 text-slate-950 rounded-full shadow-2xl z-50 flex items-center justify-center transition-all border-4 border-slate-900 active:scale-90"><i className={`fa-solid ${isChatOpen ? 'fa-times' : 'fa-brain'} text-xl`}></i></button>
-      <div className={`fixed top-0 right-0 h-full w-full max-w-md bg-slate-900 border-l border-slate-800 shadow-2xl z-[60] transform transition-transform duration-300 flex flex-col ${isChatOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+      <button 
+        onClick={() => setIsChatOpen(!isChatOpen)} 
+        className={`fixed right-4 md:right-8 w-14 h-14 bg-yellow-500 hover:bg-yellow-400 text-slate-950 rounded-full shadow-2xl z-50 flex items-center justify-center transition-all border-4 border-slate-900 active:scale-90 ${isFooterVisible ? 'bottom-72 md:bottom-72' : 'bottom-8'}`}
+      >
+        <i className={`fa-solid ${isChatOpen ? 'fa-times' : 'fa-brain'} text-xl`}></i>
+      </button>
+      <div className={`fixed top-0 right-0 h-full w-full sm:max-w-md bg-slate-900 border-l border-slate-800 shadow-2xl z-[60] transform transition-transform duration-300 flex flex-col ${isChatOpen ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/50"><div className="flex items-center gap-3"><div className="w-8 h-8 bg-yellow-500 rounded flex items-center justify-center"><i className="fa-solid fa-bolt text-slate-950 text-sm"></i></div><span className="font-black text-yellow-500 uppercase tracking-tighter text-sm">Pro Studio</span></div><button onClick={() => setIsChatOpen(false)} className="text-slate-500 hover:text-white p-2 transition-colors"><i className="fa-solid fa-xmark text-xl"></i></button></div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {chatMessages.map((m, idx) => (
             <div key={idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[90%] p-4 rounded-2xl text-sm ${m.role === 'user' ? 'bg-indigo-600/20 border border-indigo-500/30 text-slate-100 rounded-tr-none' : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'}`}>
                 {m.text}
-                {m.image && (<div className="mt-4 flex flex-col gap-2"><div className="rounded-lg overflow-hidden border border-slate-700 shadow-2xl bg-slate-950 relative group"><img src={m.image} className="w-full h-auto" /><div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"><button onClick={() => handleImageDownload(m.image!, m.isMultiView, m.isStoryboard)} className="p-3 bg-yellow-500 text-slate-950 rounded-full hover:scale-110 transition-transform"><i className="fa-solid fa-download"></i></button></div></div>
+                {m.image && (<div className="mt-4 flex flex-col gap-2"><div className="rounded-lg overflow-hidden border border-slate-700 shadow-2xl bg-slate-950 relative group">
+                    <img src={m.image} className="w-full h-auto cursor-zoom-in" onMouseEnter={() => setHoveredImage(m.image!)} onMouseLeave={() => setHoveredImage(null)} />
+                    <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none"><button onClick={() => handleImageDownload(m.image!, m.isMultiView, m.isStoryboard)} className="p-3 bg-yellow-500 text-slate-950 rounded-full hover:scale-110 transition-transform pointer-events-auto"><i className="fa-solid fa-download"></i></button></div></div>
+                <button onClick={() => setActiveRefImage(activeRefImage === m.image ? null : m.image!)} className={`w-full py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${activeRefImage === m.image ? 'bg-yellow-500 text-slate-950 shadow-lg shadow-yellow-500/20' : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'}`}>
+                    <i className={`fa-solid ${activeRefImage === m.image ? 'fa-lock' : 'fa-lock-open'}`}></i> {activeRefImage === m.image ? 'Locked as Ref' : 'Unlock Ref'}
+                </button>
                 {m.isStoryboard && (
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         {[1,2,3,4].map(q => (
                             <button key={q} onClick={() => handleUpscaleQuadrant(m.image!, q, m.text)} className="py-2 bg-slate-800 text-slate-300 text-[10px] font-bold uppercase rounded border border-slate-700 hover:bg-indigo-600 hover:text-white hover:border-indigo-500 transition-colors flex flex-col items-center gap-1">
                                 <i className="fa-solid fa-expand"></i> Panel {q}
@@ -1109,60 +1024,40 @@ export default function App() {
                 )}
                 <button onClick={() => handleSaveElement(mode, getContextName(), m.text.substring(0, 100), m.image!)} className="w-full py-2 bg-slate-700 hover:bg-green-600 text-white text-xs font-bold rounded flex items-center justify-center gap-2 transition-colors"><i className="fa-solid fa-floppy-disk"></i>Add to Registry</button></div>)}
                 {m.audioData && (<div className="mt-4 bg-slate-900 p-3 rounded-lg border border-slate-700 flex items-center gap-3"><button onClick={() => playAudio(m.audioData!)} className="w-10 h-10 rounded-full bg-pink-500 text-slate-950 flex items-center justify-center transition-transform hover:scale-105"><i className="fa-solid fa-play"></i></button><div className="flex-1 text-[10px] text-slate-400 uppercase tracking-widest font-black">Voice Output</div><button onClick={() => handleAudioDownload(m.audioData!, charData.voiceProvider === 'ElevenLabs')} className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center transition-colors hover:text-white"><i className="fa-solid fa-download"></i></button></div>)}
-                {idx === chatMessages.length - 1 && isTyping && <div className="mt-2 flex items-center gap-2"><span className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-bounce"></span><span className="text-[10px] text-yellow-500/60 font-black uppercase animate-pulse">{genStatus}</span></div>}
               </div>
             </div>
           ))}
+          {/* Dedicated Loading Bubble */}
+          {isTyping && (
+            <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="bg-slate-800 border border-slate-700 p-4 rounded-2xl rounded-tl-none text-slate-400 text-sm flex items-center gap-3 shadow-lg">
+                    <div className="flex gap-1 h-2 items-center">
+                        <div className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                        <div className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                        <div className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                    </div>
+                    <span className="text-xs font-bold uppercase tracking-widest text-yellow-500/80">{genStatus || 'Thinking...'}</span>
+                </div>
+            </div>
+          )}
           <div ref={chatEndRef} />
         </div>
         <form onSubmit={(e) => { e.preventDefault(); if (chatInput.trim()) sendToAI(chatInput); }} className="p-4 bg-slate-950 border-t border-slate-800">
-          <div className="relative"><input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Refine chronicle..." className="w-full bg-slate-900 border border-slate-700 rounded-xl py-4 pl-5 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/50 transition-all text-slate-200" /><button type="submit" disabled={isTyping || !chatInput.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-yellow-500 hover:text-yellow-400 disabled:opacity-20 transition-all"><i className="fa-solid fa-paper-plane text-lg"></i></button></div>
+           <div className={`mb-3 flex items-center justify-between px-2 text-[10px] font-bold uppercase tracking-widest ${activeRefImage ? 'text-yellow-500' : 'text-slate-600'}`}>
+              <span>Consistency Lock: {activeRefImage ? 'Active' : 'Inactive'}</span>
+              {activeRefImage && <span className="animate-pulse"><i className="fa-solid fa-lock"></i></span>}
+           </div>
+          <div className="relative"><input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Refine chronicle..." className="w-full bg-slate-900 border border-slate-700 rounded-xl py-4 pl-5 pr-14 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/50 transition-all text-slate-200" /><button type="submit" disabled={isTyping || !chatInput.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-yellow-500 hover:text-yellow-400 disabled:opacity-20 transition-all"><i className="fa-solid fa-paper-plane text-lg"></i></button></div>
         </form>
       </div>
+
+      {hoveredImage && (
+        <div className="fixed inset-0 z-[9999] pointer-events-none flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 p-8">
+            <div className="relative bg-slate-900/50 p-2 rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
+                <img src={hoveredImage} className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg" alt="Inspection" />
+            </div>
+        </div>
+      )}
     </div>
   );
 }
-
-const InputField: React.FC<{ label: string; value: string; onChange: (value: string) => void; placeholder?: string; isTextArea?: boolean; rows?: number; type?: string; }> = ({ label, value, onChange, placeholder, isTextArea, rows = 3, type = "text" }) => (
-  <div className="flex flex-col gap-1.5 w-full"><label className="text-xs font-medium text-slate-400">{label}</label>{isTextArea ? (<textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={rows} className="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/30 transition-all resize-none text-slate-200" />) : (<input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/30 transition-all text-slate-200" />)}</div>
-);
-
-const SectionTitle: React.FC<{ title: string; icon: string }> = ({ title, icon }) => ( <h3 className="text-sm font-semibold text-yellow-500/80 uppercase tracking-wider mb-4 flex items-center gap-2"><i className={`fa-solid ${icon}`}></i> {title}</h3> );
-
-const VisualReference: React.FC<{ imageData?: string; onUpload: (data: string) => void; onClear: () => void; }> = ({ imageData, onUpload, onClear }) => {
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => { if (e.target.files && e.target.files[0]) { const reader = new FileReader(); reader.onloadend = () => onUpload(reader.result as string); reader.readAsDataURL(e.target.files[0]); } };
-  return (
-    <div className="bg-slate-900/40 p-4 rounded-xl border border-slate-800 mb-4">
-      <div className="flex flex-col gap-3">
-        {!imageData ? (<div className="relative group w-full h-24"><input type="file" accept="image/*" onChange={handleUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" /><div className="border-2 border-dashed border-slate-700 rounded-xl h-full flex flex-col items-center justify-center gap-2 text-slate-500 group-hover:border-yellow-500/50 group-hover:text-yellow-500 transition-colors bg-slate-800/50"><i className="fa-solid fa-image text-xl"></i><span className="text-[10px] font-black uppercase tracking-widest">Add Ref</span></div></div>) : (<div className="relative rounded-lg overflow-hidden border border-slate-700 group w-full aspect-video"><img src={imageData} alt="Ref" className="w-full h-full object-cover" /><button onClick={onClear} className="absolute top-2 right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"><i className="fa-solid fa-xmark"></i></button></div>)}
-      </div>
-    </div>
-  );
-};
-
-const SettingsModal: React.FC<{ isOpen: boolean; onClose: () => void; apiKey: string; elevenLabsKey: string; onUpdate: (gemini?: string, eleven?: string) => void; }> = ({ isOpen, onClose, apiKey, elevenLabsKey, onUpdate }) => {
-  const [showKey, setShowKey] = useState(false); const [localGemini, setLocalGemini] = useState(apiKey); const [localEleven, setLocalEleven] = useState(elevenLabsKey);
-  const modalRef = useRef<HTMLDivElement>(null); useClickOutside(modalRef, onClose);
-  useEffect(() => { setLocalGemini(apiKey); setLocalEleven(elevenLabsKey); }, [apiKey, elevenLabsKey]);
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <div ref={modalRef} className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
-        <div className="p-6 border-b border-slate-800 flex justify-between items-center"><h2 className="text-xl font-bold text-white">Multiversal API Keys</h2><button onClick={onClose} className="text-slate-500 hover:text-white"><i className="fa-solid fa-xmark"></i></button></div>
-        <div className="p-6 space-y-4">
-           <div className="relative"><InputField label="Google Gemini API Key" type={showKey ? "text" : "password"} value={localGemini} onChange={setLocalGemini} /><button onClick={() => setShowKey(!showKey)} className="absolute right-3 top-8 text-slate-500 hover:text-white"><i className={`fa-solid ${showKey ? 'fa-eye-slash' : 'fa-eye'}`}></i></button></div>
-           <div className="relative"><InputField label="ElevenLabs API Key" type={showKey ? "text" : "password"} value={localEleven} onChange={setLocalEleven} /><button onClick={() => setShowKey(!showKey)} className="absolute right-3 top-8 text-slate-500 hover:text-white"><i className={`fa-solid ${showKey ? 'fa-eye-slash' : 'fa-eye'}`}></i></button></div>
-           <button onClick={() => { onUpdate(localGemini, localEleven); onClose(); }} className="w-full py-2.5 bg-indigo-600 text-white font-bold rounded-lg mt-2 shadow-lg shadow-indigo-600/20">Secure Credentials</button>
-           <p className="text-[10px] text-slate-500 italic text-center">Keys are saved to your profile and encrypted in transit.</p>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const AssetManager: React.FC<{ library: any[]; currentId?: string; onLoad: (id: string) => void; onSave: () => void; onNew: () => void; onDelete: () => void; label: string; }> = ({ library, currentId, onLoad, onSave, onNew, onDelete, label }) => (
-  <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row gap-4 items-center mb-6 shadow-lg">
-    <div className="flex-1 w-full flex flex-col gap-1"><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{label} Stack</label><select value={currentId || ""} onChange={(e) => onLoad(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-yellow-500/30"><option value="">-- Workspace Draft --</option>{library.map((item: any) => (<option key={item.id} value={item.id}>{item.name || "Untitled"}</option>))}</select></div>
-    <div className="flex gap-2 w-full sm:w-auto pt-5"><button onClick={onNew} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg transition-colors border border-slate-700" title="New Draft"><i className="fa-solid fa-plus"></i></button><button onClick={onSave} className="flex-1 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2"><i className="fa-solid fa-floppy-disk"></i>Save Stack</button>{currentId && <button onClick={onDelete} className="p-2 text-slate-600 hover:text-red-500 transition-colors"><i className="fa-solid fa-trash"></i></button>}</div>
-  </div>
-);
